@@ -1,0 +1,417 @@
+# Image segmentation methods - a ppt-templated talk.
+#   python ../ppt_templated.py segmentation.yaml
+# Diagrams are dashed `placeholder:` boxes (no image files yet). Swap them later with
+# `image:` in this file, or in PowerPoint via Shape Format > Shape Fill > Picture.
+# All plot data is SAMPLE data for layout purposes - replace with real numbers.
+# Math strings are single-quoted so backslashes need no escaping.
+
+meta:
+  title: "Image Segmentation Methods"
+  short_title: "Segmentation Methods"
+  subtitle: "From thresholding to transformers"
+  author: "Your Name"
+  short_author: "Your Name"
+  institute: "Computer Vision Seminar"
+  date: today
+  template: ../templates/beamer_oxford.pptx
+  transition: fade
+  output: segmentation.pptx
+
+slides:
+  - layout: title
+
+  - layout: outline
+    title: Outline
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Introduction
+    subtitle: What does it mean to segment an image?
+
+  - title: Three flavours of segmentation
+    content:
+      - placeholder:
+          label: Semantic vs instance vs panoptic
+          note: "same street scene, three outputs side by side"
+          aspect: "3:1"
+          width: 0.95
+      - columns:
+          - - block:
+                title: Semantic
+                text: "One class label per pixel; objects of the same class merge"
+          - - block:
+                title: Instance
+                text: "Separate mask per *countable* object; background ignored"
+          - - block:
+                title: Panoptic
+                text: "Both: every pixel gets a class ==and== an instance id"
+
+  - title: Problem formulation
+    content:
+      - text: "Segmentation as dense, per-pixel classification:"
+      - math: 'f_\theta : \mathbb{R}^{H \times W \times 3} \rightarrow \{1, \dots, C\}^{H \times W}'
+      - math: '\hat{y}_{i} = \arg\max_{c} \; p_\theta(c \mid x, i), \qquad i = 1, \dots, HW'
+      - alertblock:
+          title: Why it is hard
+          bullets:
+            - Needs global context (*what*) and fine localisation (*where*) at once
+            - Class imbalance - road pixels vastly outnumber pedestrians
+            - Dense labels are expensive to annotate
+        animate: fade
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Classical methods
+    subtitle: Intensity, regions, clusters and graphs
+
+  - title: Thresholding and Otsu's method
+    content:
+      - columns:
+          - width: 0.55
+            content:
+              - plot:
+                  type: line
+                  x: [0, 16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240]
+                  series:
+                    Pixel count: [2, 8, 22, 38, 41, 30, 14, 6, 5, 12, 28, 44, 39, 20, 7, 2]
+                  xlabel: Grey level
+                  ylabel: Count (x1000)
+                  legend: none
+                  caption: "Sample bimodal histogram - Otsu picks t* near the valley (~120)"
+          - content:
+              - text: "Pick the threshold that best separates two classes:"
+                size: 17
+              - math: '\sigma_B^2(t) = \omega_0(t)\,\omega_1(t)\,\big[\mu_0(t) - \mu_1(t)\big]^2'
+              - math: 't^\ast = \arg\max_t \; \sigma_B^2(t)'
+              - bullets:
+                  - Fast, parameter-free
+                  - Fails on uneven lighting - use adaptive thresholds
+                size: 17
+
+  - title: Region-based methods
+    content:
+      - columns:
+          - content:
+              - placeholder:
+                  label: Region growing
+                  note: "seed pixel expands to similar neighbours"
+                  aspect: "4:3"
+                  width: 0.9
+              - bullets:
+                  - Grow from seeds while $|I(p) - \mu_R| < \tau$
+                  - Split-and-merge on a quadtree
+                size: 17
+          - content:
+              - placeholder:
+                  label: Watershed
+                  note: "gradient magnitude as terrain, flooding from minima"
+                  aspect: "4:3"
+                  width: 0.9
+              - bullets:
+                  - Flood the gradient image from markers
+                  - Over-segments without marker control
+                size: 17
+
+  - title: Clustering in feature space
+    content:
+      - text: "Treat each pixel as a feature vector, e.g. $(L, a, b, x, y)$, and cluster:"
+      - math: '\min_{\{C_k\},\{\mu_k\}} \; \sum_{k=1}^{K} \sum_{x_i \in C_k} \lVert x_i - \mu_k \rVert^2'
+      - columns:
+          - width: 0.5
+            content:
+              - placeholder:
+                  label: K-means / SLIC superpixels
+                  note: "image overlaid with superpixel boundaries"
+                  aspect: "16:9"
+          - content:
+              - bullets:
+                  - "**K-means**: $K$ fixed in advance"
+                  - "**Mean shift**: finds modes, $K$ is automatic"
+                  - "**SLIC**: local k-means, compact superpixels"
+                size: 17
+                build: true
+
+  - title: Graph-based segmentation
+    content:
+      - text: "Pixels are nodes; edges weight similarity between neighbours."
+      - math: 'E(L) = \sum_{p} D_p(L_p) \;+\; \lambda \sum_{(p,q) \in \mathcal{N}} V_{pq}(L_p, L_q)'
+      - columns:
+          - width: 0.45
+            content:
+              - placeholder:
+                  label: Graph cut
+                  note: "pixel grid with source / sink terminals and min cut"
+                  aspect: "4:3"
+          - content:
+              - math: '\operatorname{Ncut}(A, B) = \frac{\operatorname{cut}(A,B)}{\operatorname{assoc}(A,V)} + \frac{\operatorname{cut}(A,B)}{\operatorname{assoc}(B,V)}'
+              - bullets:
+                  - Binary graph cuts are solved exactly by max-flow
+                  - Normalized cuts avoid tiny isolated segments
+                  - GrabCut adds interactive box prompts
+                size: 17
+
+  - title: Active contours and level sets
+    content:
+      - columns:
+          - width: 0.42
+            content:
+              - placeholder:
+                  label: Evolving contour
+                  note: "snake shrinking onto an object boundary over iterations"
+                  aspect: "1:1"
+                  width: 0.9
+          - content:
+              - text: "Snake energy of a curve $v(s)$:"
+                size: 17
+              - math: 'E = \int_0^1 \tfrac{1}{2}\big(\alpha \lVert v^\prime(s) \rVert^2 + \beta \lVert v^{\prime\prime}(s) \rVert^2\big) + E_{\text{img}}(v(s)) \, ds'
+              - bullets:
+                  - Internal terms keep the curve smooth
+                  - Image term pulls it to edges
+                  - Level sets handle topology changes
+                size: 17
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Deep learning methods
+    subtitle: End-to-end dense prediction
+
+  - title: Fully convolutional networks (FCN)
+    content:
+      - placeholder:
+          label: FCN architecture
+          note: "conv backbone, 1x1 classifier, upsampling with skip fusion (FCN-32s/16s/8s)"
+          aspect: "3:1"
+          width: 0.95
+      - bullets:
+          - Replace fully connected layers with $1 \times 1$ convolutions
+          - Learned upsampling (transposed convolution) back to input size
+          - Skip connections fuse coarse semantics with fine detail
+        build: true
+
+  - title: U-Net - encoder-decoder with skips
+    content:
+      - columns:
+          - width: 0.5
+            content:
+              - placeholder:
+                  label: U-Net
+                  note: "contracting path, expanding path, copy-and-crop skips"
+                  aspect: "4:3"
+          - content:
+              - bullets:
+                  - Symmetric encoder / decoder
+                  - Skip connections concatenate encoder features at each scale
+                  - Works with very few labelled images
+                  - - Standard in ==medical imaging==
+                  - Variants - U-Net++, Attention U-Net, nnU-Net
+                build: true
+
+  - title: DeepLab - atrous convolution and ASPP
+    content:
+      - text: "Dilated convolution enlarges the receptive field without losing resolution:"
+      - math: 'y[i] = \sum_{k} x[i + r \cdot k]\; w[k], \qquad r = \text{dilation rate}'
+      - columns:
+          - width: 0.55
+            content:
+              - placeholder:
+                  label: ASPP module
+                  note: "parallel atrous convs at rates 6, 12, 18 + image pooling"
+                  aspect: "16:9"
+          - content:
+              - bullets:
+                  - Multi-scale context in parallel branches
+                  - DeepLabv3+ adds a light decoder for sharp boundaries
+                size: 17
+
+  - title: Instance segmentation - Mask R-CNN
+    content:
+      - placeholder:
+          label: Mask R-CNN pipeline
+          note: "backbone + FPN, RPN proposals, RoIAlign, box / class / mask heads"
+          aspect: "3:1"
+          width: 0.95
+      - columns:
+          - - exampleblock:
+                title: Detect then segment
+                text: "A small FCN predicts a $28 \\times 28$ mask per detected box"
+          - - block:
+                title: RoIAlign
+                text: "Bilinear sampling without quantisation keeps masks aligned"
+
+  - title: Transformer-based segmentation
+    content:
+      - table:
+          header: [Model, Year, Key idea, Task]
+          rows:
+            - [SETR, 2021, ViT encoder + simple decoder, Semantic]
+            - [SegFormer, 2021, Hierarchical encoder + all-MLP decoder, Semantic]
+            - [MaskFormer / Mask2Former, 2021-22, Mask classification with queries, "==Universal=="]
+            - ["**SAM**", 2023, Promptable foundation model, Any mask]
+          style: booktabs
+          align: [l, c, l, l]
+      - placeholder:
+          label: Query-based mask decoding
+          note: "N learned queries -> N (class, mask) pairs"
+          aspect: "4:1"
+          width: 0.8
+
+  - title: Segment Anything (SAM)
+    content:
+      - columns:
+          - width: 0.55
+            content:
+              - placeholder:
+                  label: SAM architecture
+                  note: "image encoder, prompt encoder (points / box / mask), mask decoder"
+                  aspect: "4:3"
+          - content:
+              - bullets:
+                  - Trained on SA-1B - over 1 billion masks
+                  - Prompts - points, boxes, coarse masks
+                  - Zero-shot transfer to new domains
+                  - Outputs several candidate masks per prompt
+                build: true
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Training and evaluation
+
+  - title: Loss functions
+    content:
+      - math: '\mathcal{L}_{\text{CE}} = -\frac{1}{N} \sum_{i=1}^{N} \sum_{c=1}^{C} y_{ic} \log p_{ic}'
+      - math: '\mathcal{L}_{\text{Dice}} = 1 - \frac{2 \sum_i p_i g_i}{\sum_i p_i + \sum_i g_i}'
+      - math: '\mathcal{L}_{\text{Focal}} = -\alpha \,(1 - p_t)^{\gamma} \log p_t'
+      - block:
+          title: In practice
+          text: 'Combine them, e.g. $\mathcal{L} = \mathcal{L}_{\text{CE}} + \mathcal{L}_{\text{Dice}}$: CE for stable gradients, Dice for ==class imbalance==.'
+        animate: fade
+
+  - title: Loss choice matters (sample curves)
+    content:
+      - plot:
+          type: line
+          x: [0, 10, 20, 30, 40, 50, 60, 70, 80]
+          series:
+            CE:        {y: [0.10, 0.48, 0.60, 0.66, 0.69, 0.71, 0.72, 0.72, 0.73], err: [0.02, 0.03, 0.02, 0.02, 0.02, 0.01, 0.01, 0.01, 0.01]}
+            Dice:      {y: [0.10, 0.42, 0.58, 0.67, 0.71, 0.73, 0.74, 0.75, 0.75], err: [0.03, 0.04, 0.03, 0.02, 0.02, 0.02, 0.01, 0.01, 0.01]}
+            CE + Dice: {y: [0.10, 0.52, 0.65, 0.71, 0.74, 0.76, 0.77, 0.78, 0.78], err: [0.02, 0.03, 0.02, 0.02, 0.01, 0.01, 0.01, 0.01, 0.01]}
+          xlabel: Epoch
+          ylabel: Validation mIoU
+          yformat: "{x:.0%}"
+          legend: lower right
+          caption: "Sample data - U-Net on an imbalanced dataset, mean +/- std over 3 seeds"
+
+  - title: Evaluation metrics
+    content:
+      - columns:
+          - content:
+              - math: '\operatorname{IoU} = \frac{|A \cap B|}{|A \cup B|} = \frac{TP}{TP + FP + FN}'
+              - math: '\operatorname{mIoU} = \frac{1}{C} \sum_{c=1}^{C} \operatorname{IoU}_c'
+          - content:
+              - math: '\operatorname{Dice} = \frac{2\,TP}{2\,TP + FP + FN}'
+              - math: '\operatorname{PQ} = \frac{\sum_{(p,g) \in TP} \operatorname{IoU}(p,g)}{|TP| + \tfrac{1}{2}|FP| + \tfrac{1}{2}|FN|}'
+      - bullets:
+          - "**mIoU** - standard for semantic segmentation"
+          - "**Dice** - common in medical imaging"
+          - "**PQ** - panoptic quality, combines recognition and segmentation"
+        size: 17
+
+  - title: Per-class errors (sample confusion matrix)
+    content:
+      - columns:
+          - width: 0.55
+            content:
+              - plot:
+                  type: confusion
+                  labels: [Road, Sidewalk, Building, Veg., Car, Person]
+                  matrix:
+                    - [960, 30, 2, 3, 4, 1]
+                    - [70, 850, 30, 20, 10, 20]
+                    - [2, 10, 920, 50, 8, 10]
+                    - [3, 15, 40, 930, 5, 7]
+                    - [8, 5, 10, 4, 960, 13]
+                    - [5, 40, 30, 25, 20, 880]
+                  normalize: "true"
+                  value_format: "{:.0%}"
+                  aspect: "1:1"
+          - content:
+              - bullets:
+                  - Rows = ground truth, normalised to recall
+                  - Sidewalk is often confused with road
+                  - Thin / small classes (person) suffer most
+                  - Boundary pixels account for much of the error
+                size: 17
+              - text: "Sample data for illustration"
+                size: 14
+                color: muted
+
+  - title: Benchmark comparison (sample)
+    content:
+      - plot:
+          type: bar
+          categories: [FCN-8s, U-Net, DeepLabv3+, SegFormer-B5, Mask2Former]
+          series:
+            Cityscapes: [65.3, 70.1, 80.9, 82.4, 83.3]
+            ADE20K:     [29.4, 33.0, 45.5, 51.0, 57.3]
+          values: true
+          value_format: "{:.0f}"
+          ylabel: mIoU (%)
+          ylim: [0, 100]
+          legend: top
+          caption: "Illustrative values only - replace with numbers from your own experiments or cited papers"
+
+  - title: Accuracy vs speed (sample)
+    content:
+      - plot:
+          type: scatter
+          series:
+            CNN:         [[45, 70.1], [22, 76.5], [8, 80.9]]
+            Transformer: [[30, 76.2], [12, 81.0], [5, 82.4], [3, 83.3]]
+            Real-time:   [[120, 68.4], [90, 72.3], [60, 75.8]]
+          xscale: log
+          xlabel: Inference speed (FPS, log scale)
+          ylabel: Cityscapes mIoU (%)
+          trend: false
+          legend: upper right
+          caption: "Sample data - the accuracy / latency trade-off"
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Summary
+
+  - title: Classical vs deep methods
+    content:
+      - table:
+          header: [Aspect, Classical, Deep learning]
+          rows:
+            - [Labelled data, None or little, Large dense annotations]
+            - [Semantics, Low-level cues only, "==Learned object categories=="]
+            - [Compute, CPU friendly, GPU for training and often inference]
+            - [Interpretability, High, Low]
+            - [Best use, "Preprocessing, simple scenes, interactive tools", "Complex scenes, production systems"]
+          style: striped
+          align: [l, l, l]
+
+  - title: Summary
+    content:
+      - placeholder:
+          label: Timeline of segmentation methods
+          note: "Otsu 1979 -> watershed -> normalized cuts -> FCN 2015 -> U-Net -> DeepLab -> Mask2Former -> SAM 2023"
+          aspect: "5:1"
+          width: 0.95
+      - bullets:
+          - Classical methods group pixels by intensity, regions, clusters or graph energies
+          - FCN made segmentation end-to-end; U-Net and DeepLab refined resolution and context
+          - Transformers unify semantic, instance and panoptic tasks
+          - Foundation models (SAM) segment ==anything== from prompts
+        build: fade
+
+  - layout: plain
+    content:
+      - text: "Thank you!"
+        size: 44
+        align: center
+        color: structure
+      - text: "Questions?"
+        align: center
+        color: muted

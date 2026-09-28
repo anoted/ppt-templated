@@ -1,0 +1,429 @@
+# The Transformer architecture - a ppt-templated talk.
+#   python ../ppt_templated.py transformer.yaml
+# Diagrams are dashed `placeholder:` boxes (no image files needed). Each has a label, a note
+# saying what to draw, and the final aspect ratio. When a figure is ready, change the item to
+# `image: {path: ..., width: ...}` and rebuild, or in PowerPoint use Shape Fill > Picture.
+# Math strings are single-quoted so backslashes need no escaping.
+
+meta:
+  title: "The Transformer"
+  short_title: "The Transformer"
+  subtitle: "Attention is all you need - architecture, mathematics and training"
+  author: "Your Name"
+  short_author: "Your Name"
+  institute: "Deep Learning Seminar"
+  date: today
+  template: ../templates/beamer_blue.pptx
+  transition: fade
+  output: transformer.pptx
+
+slides:
+  - layout: title
+
+  - layout: outline
+    title: Outline
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Motivation
+
+  - title: Why move beyond recurrence?
+    content:
+      - columns:
+          - width: 0.5
+            content:
+              - bullets:
+                  - 'RNNs compute $h_t = f(h_{t-1}, x_t)$ one step at a time'
+                  - - No parallelism across the sequence
+                    - 'Signal between distant tokens passes through $O(n)$ steps'
+                  - Vanishing / exploding gradients over long spans
+                  - "**Attention** connects every pair of positions in ==one step=="
+                build: fade
+          - content:
+              - placeholder:
+                  label: RNN vs attention
+                  note: "left: RNN chain, one step per token; right: every token linked to every other in one step"
+                  aspect: "11:5"
+                  width: 1.0
+
+  - title: The core idea
+    content:
+      - block:
+          title: Self-attention in one sentence
+          text: "Each token builds its new representation as a **weighted average** of all tokens, where the weights come from how well its *query* matches their *keys*."
+      - math: 'y_i = \sum_{j=1}^{n} \alpha_{ij}\, v_j, \qquad \alpha_{ij} = \frac{\exp(q_i^\top k_j)}{\sum_{l=1}^{n} \exp(q_i^\top k_l)}'
+        animate: fade
+      - text: 'The weights $\alpha_{ij} \ge 0$ and $\sum_j \alpha_{ij} = 1$ for every query $i$.'
+        align: center
+        color: muted
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Architecture
+    subtitle: Encoder-decoder stack
+
+  - title: The big picture
+    content:
+      - columns:
+          - width: 0.42
+            content:
+              - placeholder:
+                  label: Encoder-decoder architecture
+                  note: "N x encoder stack (left) feeding N x decoder stack (right), linear + softmax head on top"
+                  aspect: "4:5"
+                  width: 0.95
+          - content:
+              - bullets:
+                  - "**Encoder**: $N = 6$ identical layers"
+                  - - Self-attention + feed-forward
+                  - "**Decoder**: $N = 6$ identical layers"
+                  - - Masked self-attention
+                    - Cross-attention over encoder output
+                    - Feed-forward
+                  - 'Model width $d_{\text{model}} = 512$ throughout'
+                  - Linear + softmax head produces next-token probabilities
+                build: true
+
+  - title: Input representation
+    content:
+      - placeholder:
+          label: Token embedding + positional encoding
+          note: "token ids -> embedding rows, scaled by sqrt(d_model), plus P, gives X"
+          aspect: "12:5"
+          width: 0.75
+      - math: 'X = \left[\, E_{x_1};\, E_{x_2};\, \dots;\, E_{x_n} \,\right] \sqrt{d_{\text{model}}} + P, \qquad X \in \mathbb{R}^{n \times d_{\text{model}}}'
+      - text: '$E \in \mathbb{R}^{|V| \times d_{\text{model}}}$ is the embedding table (shared with the output projection); $P$ holds positional encodings.'
+        size: 16
+        align: center
+        color: muted
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Attention
+    subtitle: Queries, keys and values
+
+  - title: Queries, keys and values
+    content:
+      - text: "Three learned linear projections of the same input:"
+      - math: 'Q = X W^Q, \qquad K = X W^K, \qquad V = X W^V'
+      - math: 'W^Q, W^K \in \mathbb{R}^{d_{\text{model}} \times d_k}, \qquad W^V \in \mathbb{R}^{d_{\text{model}} \times d_v}'
+      - exampleblock:
+          title: Intuition
+          bullets:
+            - "**Query** - what am I looking for?"
+            - "**Key** - what do I contain?"
+            - "**Value** - what do I pass on if selected?"
+        animate: fade
+
+  - title: Scaled dot-product attention
+    content:
+      - columns:
+          - width: 0.36
+            content:
+              - placeholder:
+                  label: Scaled dot-product attention
+                  note: "MatMul(Q, K) -> scale -> optional mask -> softmax -> MatMul with V"
+                  aspect: "9:10"
+                  width: 0.95
+          - content:
+              - math: '\operatorname{Attention}(Q, K, V) = \operatorname{softmax}\!\left(\frac{Q K^\top}{\sqrt{d_k}}\right) V'
+              - bullets:
+                  - '$Q K^\top \in \mathbb{R}^{n \times n}$: all pairwise similarity scores'
+                  - Softmax is taken row-wise, over keys
+                  - Output is one weighted sum of values per query
+                size: 18
+                build: true
+
+  - title: Why scale by 1/sqrt(d_k)?
+    content:
+      - text: 'Assume the components of $q$ and $k$ are independent with mean 0 and variance 1:'
+      - math: 'q^\top k = \sum_{i=1}^{d_k} q_i k_i \quad\Rightarrow\quad \mathbb{E}[q^\top k] = 0, \qquad \operatorname{Var}(q^\top k) = d_k'
+      - alertblock:
+          title: Problem
+          text: 'For large $d_k$ the logits grow like $\sqrt{d_k}$, softmax saturates to a near one-hot vector, and its gradients vanish.'
+        animate: fade
+      - math: '\operatorname{Var}\!\left(\frac{q^\top k}{\sqrt{d_k}}\right) = 1'
+        animate: fade
+
+  - title: The softmax and its gradient
+    content:
+      - math: '\operatorname{softmax}(z)_i = \frac{e^{z_i}}{\sum_{j} e^{z_j}}'
+      - math: '\frac{\partial\, \operatorname{softmax}(z)_i}{\partial z_j} = s_i \left(\delta_{ij} - s_j\right)'
+      - text: 'When one $s_i \to 1$, every entry $s_i(\delta_{ij} - s_j) \to 0$: the ==saturation== that scaling avoids.'
+        align: center
+
+  - title: Multi-head attention
+    content:
+      - placeholder:
+          label: Multi-head attention
+          note: "h parallel heads, each with its own linear projections of Q, K and V -> concat -> linear W^O"
+          aspect: "13:10"
+          width: 0.5
+      - math: '\operatorname{head}_i = \operatorname{Attention}\!\left(Q W_i^Q,\; K W_i^K,\; V W_i^V\right)'
+      - math: '\operatorname{MultiHead}(Q, K, V) = \operatorname{Concat}(\operatorname{head}_1, \dots, \operatorname{head}_h)\, W^O'
+      - text: 'Base model: $h = 8$ heads, $d_k = d_v = d_{\text{model}}/h = 64$, $W^O \in \mathbb{R}^{h d_v \times d_{\text{model}}}$.'
+        size: 16
+        align: center
+        color: muted
+
+  - title: What do heads learn?
+    content:
+      - columns:
+          - content:
+              - placeholder:
+                  label: Attention weight heatmap
+                  note: "query tokens (rows) x key tokens (columns), darker = higher weight"
+                  aspect: "11:10"
+                  width: 0.9
+          - content:
+              - bullets:
+                  - Different heads specialise
+                  - - Positional (previous / next token)
+                    - Syntactic (subject - verb)
+                    - Coreference (pronoun - antecedent)
+                  - Total cost equals one full-width head
+                  - - "$h$ heads of width $d_{\\text{model}}/h$"
+                build: true
+
+  - title: Masked (causal) self-attention
+    content:
+      - columns:
+          - width: 0.38
+            content:
+              - placeholder:
+                  label: Causal mask
+                  note: "lower-triangular n x n matrix: 0 on and below the diagonal, -inf above"
+                  aspect: "1:1"
+                  width: 0.9
+          - content:
+              - text: "The decoder must not look at future tokens:"
+              - math: 'M_{ij} = \begin{cases} 0 & j \le i \\ -\infty & j > i \end{cases}'
+              - math: '\operatorname{softmax}\!\left(\frac{Q K^\top}{\sqrt{d_k}} + M\right) V'
+              - text: 'Since $e^{-\infty} = 0$, position $i$ attends only to $1, \dots, i$.'
+                size: 16
+                color: muted
+
+  - title: Three uses of attention
+    content:
+      - table:
+          header: [Where, Queries from, Keys / values from, Mask]
+          rows:
+            - [Encoder self-attention, Encoder, Encoder, Padding only]
+            - [Decoder self-attention, Decoder, Decoder, "==Causal=="]
+            - [Cross-attention, Decoder, "**Encoder output**", Padding only]
+          style: booktabs
+      - math: '\operatorname{CrossAttn} = \operatorname{Attention}\!\left(H_{\text{dec}} W^Q,\; H_{\text{enc}} W^K,\; H_{\text{enc}} W^V\right)'
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Positional encoding
+
+  - title: Attention is permutation-equivariant
+    content:
+      - text: 'For any permutation matrix $\Pi$:'
+      - math: '\operatorname{Attention}(\Pi X W^Q,\, \Pi X W^K,\, \Pi X W^V) = \Pi\, \operatorname{Attention}(X W^Q,\, X W^K,\, X W^V)'
+      - alertblock:
+          title: Consequence
+          text: "Without extra information, *the cat sat on the mat* and *the mat sat on the cat* look identical. Order must be injected explicitly."
+        animate: fade
+
+  - title: Sinusoidal positional encoding
+    content:
+      - columns:
+          - content:
+              - math: 'PE_{(pos,\, 2i)} = \sin\!\left(\frac{pos}{10000^{2i/d_{\text{model}}}}\right)'
+              - math: 'PE_{(pos,\, 2i+1)} = \cos\!\left(\frac{pos}{10000^{2i/d_{\text{model}}}}\right)'
+              - bullets:
+                  - Wavelengths from $2\pi$ to $10000 \cdot 2\pi$
+                  - No learned parameters
+                  - Extrapolates to unseen lengths
+                size: 17
+          - width: 0.42
+            content:
+              - placeholder:
+                  label: Positional encoding heatmap
+                  note: "position (rows) x dimension (columns), sin / cos stripes of growing wavelength"
+                  aspect: "8:5"
+                  width: 0.95
+
+  - title: Relative positions are linear maps
+    content:
+      - text: 'With $\omega_i = 10000^{-2i/d_{\text{model}}}$, each pair of dimensions satisfies'
+      - math: '\begin{pmatrix} \sin(\omega_i (p + k)) \\ \cos(\omega_i (p + k)) \end{pmatrix} = \begin{pmatrix} \cos \omega_i k & \sin \omega_i k \\ -\sin \omega_i k & \cos \omega_i k \end{pmatrix} \begin{pmatrix} \sin \omega_i p \\ \cos \omega_i p \end{pmatrix}'
+      - block:
+          title: Takeaway
+          text: 'An offset of $k$ is a ==rotation== that does not depend on $p$, so attention can learn to attend by relative position. RoPE builds on exactly this idea.'
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: The layer
+    subtitle: Feed-forward, residuals and normalisation
+
+  - title: Position-wise feed-forward network
+    content:
+      - math: '\operatorname{FFN}(x) = \max(0,\; x W_1 + b_1)\, W_2 + b_2'
+      - math: 'W_1 \in \mathbb{R}^{d_{\text{model}} \times d_{ff}}, \qquad W_2 \in \mathbb{R}^{d_{ff} \times d_{\text{model}}}, \qquad d_{ff} = 4\, d_{\text{model}} = 2048'
+      - bullets:
+          - Applied to each position independently (same weights)
+          - Holds about ==two thirds== of the parameters in each layer
+          - 'Modern variants: GELU, or SwiGLU $\left(\operatorname{Swish}(x W_1) \odot x W_3\right) W_2$'
+        size: 18
+
+  - title: Residual connections and layer normalisation
+    content:
+      - columns:
+          - width: 0.36
+            content:
+              - placeholder:
+                  label: Encoder layer
+                  note: "multi-head self-attention -> add & norm -> feed-forward -> add & norm"
+                  aspect: "9:10"
+                  width: 0.95
+          - content:
+              - math: '\operatorname{LN}(x) = \gamma \odot \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta'
+              - math: '\mu = \frac{1}{d}\sum_{i=1}^{d} x_i, \qquad \sigma^2 = \frac{1}{d}\sum_{i=1}^{d} (x_i - \mu)^2'
+              - text: "Two ways to wrap each sub-layer:"
+                size: 17
+              - math: '\text{Post-LN: } x \leftarrow \operatorname{LN}\big(x + \operatorname{Sublayer}(x)\big)'
+              - math: '\text{Pre-LN: } x \leftarrow x + \operatorname{Sublayer}\big(\operatorname{LN}(x)\big)'
+
+  - title: One encoder layer, end to end
+    content:
+      - math: 'Z = \operatorname{LN}\big(X + \operatorname{MultiHead}(X, X, X)\big)'
+      - math: 'H = \operatorname{LN}\big(Z + \operatorname{FFN}(Z)\big)'
+      - text: "And one decoder layer, with encoder output $H_{\\text{enc}}$:"
+      - math: 'A = \operatorname{LN}\big(Y + \operatorname{MaskedMHA}(Y, Y, Y)\big)'
+      - math: 'B = \operatorname{LN}\big(A + \operatorname{MHA}(A, H_{\text{enc}}, H_{\text{enc}})\big), \qquad Y^\prime = \operatorname{LN}\big(B + \operatorname{FFN}(B)\big)'
+
+  - title: Decoder layer
+    content:
+      - columns:
+          - width: 0.4
+            content:
+              - placeholder:
+                  label: Decoder layer
+                  note: "masked self-attention -> add & norm -> cross-attention -> add & norm -> FFN -> add & norm"
+                  aspect: "9:10"
+                  width: 0.95
+          - content:
+              - numbered:
+                  - Masked self-attention over generated tokens
+                  - Cross-attention reads the source sentence
+                  - Feed-forward refines each position
+                  - Final linear layer and softmax over the vocabulary
+                build: true
+              - math: 'p(y_t \mid y_{<t}, x) = \operatorname{softmax}\!\left(h_t W_E^\top\right)'
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Training
+    subtitle: Objective, optimiser and regularisation
+
+  - title: Training objective
+    content:
+      - text: "Autoregressive factorisation of the target sequence:"
+      - math: 'p_\theta(y \mid x) = \prod_{t=1}^{T} p_\theta(y_t \mid y_{<t}, x)'
+      - text: "Teacher forcing with cross-entropy (all positions in parallel):"
+      - math: '\mathcal{L}(\theta) = -\sum_{t=1}^{T} \log p_\theta(y_t \mid y_{<t}, x)'
+      - block:
+          title: Label smoothing ($\varepsilon_{ls} = 0.1$)
+          text: 'Target distribution $q(k) = (1 - \varepsilon_{ls})\, \mathbb{1}[k = y_t] + \varepsilon_{ls} / |V|$ - hurts perplexity but improves BLEU.'
+        animate: fade
+
+  - title: Learning-rate schedule
+    content:
+      - math: 'lr = d_{\text{model}}^{-0.5} \cdot \min\!\left(\text{step}^{-0.5},\; \text{step} \cdot \text{warmup}^{-1.5}\right)'
+      - columns:
+          - width: 0.55
+            content:
+              - placeholder:
+                  label: Learning-rate schedule
+                  note: "linear warm-up to step 4000, then decay proportional to 1/sqrt(step)"
+                  aspect: "17:10"
+                  width: 0.95
+          - content:
+              - bullets:
+                  - Linear warm-up for 4000 steps
+                  - Then decay $\propto 1/\sqrt{\text{step}}$
+                  - 'Adam: $\beta_1 = 0.9$, $\beta_2 = 0.98$, $\epsilon = 10^{-9}$'
+                  - Dropout $P_{drop} = 0.1$
+                size: 17
+
+  - title: Model configurations
+    content:
+      - table:
+          header: [Model, '$N$', '$d_{\text{model}}$', '$d_{ff}$', '$h$', Params, "BLEU (EN-DE)"]
+          rows:
+            - [Base, 6, 512, 2048, 8, 65M, 27.3]
+            - ["**Big**", 6, 1024, 4096, 16, 213M, "==28.4=="]
+          style: booktabs
+          align: [l, c, c, c, c, r, r]
+      - text: 'Parameter count per layer is roughly $4 d_{\text{model}}^2$ (attention) $+\; 2 d_{\text{model}} d_{ff}$ (FFN) $\approx 12\, d_{\text{model}}^2$.'
+        size: 17
+        align: center
+        color: muted
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Complexity and variants
+
+  - title: Cost per layer
+    content:
+      - table:
+          header: [Layer type, Complexity per layer, Sequential ops, Max path length]
+          rows:
+            - [Self-attention, '$O(n^2 \cdot d)$', '$O(1)$', '$O(1)$']
+            - [Recurrent, '$O(n \cdot d^2)$', '$O(n)$', '$O(n)$']
+            - [Convolutional, '$O(k \cdot n \cdot d^2)$', '$O(1)$', '$O(\log_k n)$']
+          style: striped
+      - alertblock:
+          title: The quadratic bottleneck
+          text: 'The $n \times n$ score matrix dominates when $n > d$. Sparse, linear and flash attention all target this term.'
+        animate: fade
+
+  - title: One architecture, three families
+    content:
+      - placeholder:
+          label: Transformer family tree
+          note: "Transformer branching into encoder-only (BERT), decoder-only (GPT), encoder-decoder (T5, BART)"
+          aspect: "11:5"
+          width: 0.62
+      - columns:
+          - - block:
+                title: Encoder-only
+                text: "BERT - masked LM, $p(x_i \\mid x_{\\setminus i})$"
+          - - block:
+                title: Decoder-only
+                text: "GPT - causal LM, $p(x_t \\mid x_{<t})$"
+          - - block:
+                title: Encoder-decoder
+                text: "T5, BART - $p(y \\mid x)$"
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Summary
+
+  - title: Summary
+    content:
+      - math: '\operatorname{softmax}\!\left(\frac{Q K^\top}{\sqrt{d_k}}\right) V'
+      - bullets:
+          - Attention replaces recurrence, so training is fully parallel
+          - Multi-head attention attends to several relations at once
+          - Positional encodings supply word order
+          - Residuals + LayerNorm make deep stacks trainable
+          - Cost is ==quadratic== in sequence length
+        build: fade
+
+  - layout: plain
+    content:
+      - text: "Thank you!"
+        size: 44
+        align: center
+        color: structure
+      - text: "Questions?"
+        align: center
+        color: muted
+      - text: "Vaswani et al., *Attention Is All You Need*, NeurIPS 2017"
+        size: 14
+        align: center
+        color: muted

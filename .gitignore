@@ -1,0 +1,6 @@
+__pycache__/
+.claude/
+.codex/
+.agents/
+paper-*/
+project_*/

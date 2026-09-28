@@ -1,0 +1,248 @@
+# Example deck for ppt-templated - shows every feature.
+#   python ppt_templated.py examples/example.yaml
+# Everything below is content only; all styling comes from the template.
+
+meta:
+  title: "Beamer-Style Decks in PowerPoint"
+  short_title: "Beamer-style PowerPoint"      # shown in the footline
+  subtitle: "Write content once, get a fully editable deck"
+  author: "A. Researcher"
+  institute: "Department of Presentation Science"
+  date: today                                # or any text, e.g. "March 3, 2026"
+  template: ../templates/beamer_blue.pptx    # try beamer_charcoal.pptx or beamer_crimson.pptx
+  transition: fade                           # default slide transition (optional)
+  # section_style: outline                   # uncomment: Beamer-style outline at every section
+
+slides:
+  - layout: title
+
+  - layout: outline
+    title: Outline
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Motivation
+
+  - title: Why separate content from formatting?
+    content:
+      - bullets:
+          - "**Consistency** - every slide follows the slide master"
+          - "**Speed** - edit a text file, rebuild in a second"
+          - - Charts rebuilt from data, not screenshots
+            - Equations stay editable
+          - "**Editability** - the output is an ==ordinary PowerPoint deck=="
+        build: fade          # one bullet per click, like Beamer's \pause
+    notes: |
+      Speaker notes go here. They appear in PowerPoint's presenter view.
+
+  - title: Beamer blocks
+    subtitle: block, alertblock and exampleblock
+    content:
+      - columns:
+          - - block:
+                title: Definition
+                text: "A *template* holds all formatting: theme colours, fonts, the slide master and layouts."
+              animate: fade
+          - - alertblock:
+                title: Watch out
+                text: "Formatting typed into the content file is limited to **bold**, *italic*, `code`, ==alert== and [links](https://python-pptx.readthedocs.io)."
+              animate: fade
+          - - exampleblock:
+                title: Example
+                bullets:
+                  - Theme accent 3
+                  - Bullets work too
+              animate: fade
+
+  - title: Equations are native and editable
+    content:
+      - text: "The Gaussian integral, with inline math such as $\\sigma^2$ and $e^{-x^2}$:"
+      - math: "\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}"
+        animate: zoom
+      - text: "Bayes' rule:"
+      - math: "P(A \\mid B) = \\frac{P(B \\mid A)\\,P(A)}{P(B)}"
+        animate: fade
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Results
+    subtitle: Charts, tables and figures
+
+  - title: Native chart - right-click, Edit Data
+    content:
+      - chart:
+          type: column
+          categories: [Q1, Q2, Q3, Q4]
+          series:
+            "2025": [120, 135, 128, 150]
+            "2026": [142, 160, 171, 188]
+          labels: true
+          y_title: Revenue (k$)
+        animate: wipe
+
+  - title: Chart next to text
+    content:
+      - columns:
+          - width: 0.58
+            content:
+              - chart:
+                  type: line
+                  categories: [2019, 2020, 2021, 2022, 2023, 2024, 2025]
+                  series:
+                    Baseline: [2.1, 2.4, 2.2, 2.9, 3.1, 3.3, 3.6]
+                    Our method: [2.3, 2.9, 3.4, 3.9, 4.6, 5.0, 5.7]
+                  y_title: Throughput
+          - content:
+              - bullets:
+                  - Our method pulls ahead after 2020
+                  - - "+58% by 2025"
+                  - Baseline growth is roughly linear
+                build: true
+              - alertblock:
+                  title: Caveat
+                  text: Synthetic data for illustration.
+
+  - title: Pie and doughnut charts
+    content:
+      - columns:
+          - - chart:
+                type: pie
+                title: Traffic by channel
+                categories: [Search, Direct, Social, Email]
+                series: {Share: [0.46, 0.27, 0.17, 0.10]}
+                labels: true
+                percent: true
+          - - chart:
+                type: doughnut
+                title: Budget
+                categories: [Staff, Compute, Travel, Other]
+                series: {Budget: [55, 25, 12, 8]}
+
+  - title: Tables in booktabs style
+    content:
+      - table:
+          header: [Model, Params, Accuracy, Latency (ms)]
+          rows:
+            - [Baseline, 12M, 81.4%, 14]
+            - [Wide, 48M, 84.9%, 31]
+            - ["**Ours**", 20M, "==86.2%==", 17]
+          style: booktabs      # or: striped, grid
+      - text: "Striped style:"
+        size: 16
+      - table:
+          header: [Region, Q1, Q2, Q3]
+          rows:
+            - [North, 120, 135, 140]
+            - [South, 98, 110, 125]
+          style: striped
+
+  - title: Figures from any tool
+    content:
+      - image:
+          path: assets/contour.png
+          width: 0.7
+          caption: "Contour plots have no native PowerPoint form, so they come in as images."
+          alt: Contour plot of a two-peak surface
+        animate: fade
+
+  - title: Code listings
+    content:
+      - code: |
+          from ppt_templated import build_deck
+
+          # content.yaml + template -> editable deck
+          build_deck("talk.yaml", "talk.pptx")
+      - numbered:
+          - Write or edit the YAML file
+          - Run `python ppt_templated.py talk.yaml`
+          - Open the .pptx and edit freely
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Diagrams
+    subtitle: Flowcharts and workflows
+
+  - title: Flowchart from nodes and edges
+    content:
+      - flow:
+          nodes:
+            - {id: raw, text: "Raw data", shape: data}
+            - {id: clean, text: "Clean + **normalize**"}
+            - {id: ok, text: "Quality OK?", shape: decision}
+            - {id: model, text: "Train model $f_\\theta$", color: alert}
+            - {id: store, text: "Model registry", shape: database}
+          edges:
+            - raw -> clean -> ok
+            - ok -> model: "yes"        # quote yes/no: bare yes is a YAML boolean
+            - ok -> clean: "no"         # a loop is routed around the outside
+            - model -> store
+          groups:
+            - {label: Preprocessing, nodes: [clean, ok]}
+          caption: "Native shapes and connectors: drag a box in PowerPoint and its arrows follow."
+
+  - title: Top-down flow, revealed step by step
+    content:
+      - columns:
+          - width: 0.5
+            content:
+              - flow:
+                  direction: down
+                  nodes:
+                    - {id: s, text: Start, shape: terminal}
+                    - {id: read, text: Read batch, shape: data}
+                    - {id: more, text: "More data?", shape: decision}
+                    - {id: step, text: Gradient step}
+                    - {id: save, text: Save weights, shape: document}
+                  edges:
+                    - s -> read -> more
+                    - more -> step: "yes"
+                    - more -> save: "no"      # a second branch leaves the diamond from the side
+                    - step -> read
+                build: true                  # one click per step along the flow
+          - content:
+              - bullets:
+                  - "`direction: down` for classic flowcharts"
+                  - "Shapes: `terminal`, `data`, `decision`, `document`, `database`, ..."
+                  - "`build: true` reveals one step per click"
+
+  - title: Workflow steps
+    content:
+      - steps: [Collect, Clean, Train, Evaluate, Deploy]
+        highlight: 3                         # "we are here"
+      - steps:
+          items: [Plan, Build, Measure, Learn]
+          shape: box                         # boxes joined by arrows instead of chevrons
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Animation
+
+  - title: Morph transitions (1/2)
+    content:
+      - columns:
+          - width: 0.35
+            content:
+              - block:
+                  title: Focus
+                  text: This block moves and grows on the next slide.
+                name: focus
+          - content:
+              - text: " "
+
+  - title: Morph transitions (2/2)
+    transition: morph
+    content:
+      - block:
+          title: Focus
+          text: "Shapes with the same name (\"!!focus\") are matched by Morph, so PowerPoint animates the move. Older PowerPoint versions fall back to a fade."
+        name: focus
+
+  - layout: plain
+    content:
+      - text: "Thank you!"
+        size: 44
+        align: center
+        color: structure
+      - text: "Questions?"
+        align: center
+        color: muted
