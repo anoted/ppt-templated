@@ -2,8 +2,10 @@
 """
 ppt_templated.py - build an editable, Beamer-style PowerPoint deck from a YAML content file.
 
-    python ppt_templated.py talk.yaml                          # -> talk.pptx
-    python ppt_templated.py talk.yaml -o out.pptx -t templates/beamer_blue.pptx
+    python ppt_templated.py talk.yaml                  # -> talk.pptx
+    python ppt_templated.py talk.yaml --preview        # ... and slide PNGs + contact sheets to look at
+    python ppt_templated.py talk.yaml --check          # validate and lay out only, write nothing
+    python ppt_templated.py --inspect templates/beamer_blue.pptx   # what a template provides
 
 The formatting lives in the TEMPLATE (slide master, layouts, theme colours and fonts).
 The CONTENT FILE only says what goes on each slide. Everything in the output is a native,
@@ -13,8 +15,11 @@ native tables, native equations (when pandoc is installed) and native animations
 Requirements:  pip install python-pptx pyyaml pillow
 Optional:      pandoc (or `pip install pypandoc_binary`) for native, editable equations.
                matplotlib + numpy for `plot:` figures (see plots.py).
-Layout of `flow:` / `steps:` diagrams lives in flows.py (pure Python, no extra packages).
+               Chrome/Edge (or cairosvg) for the PNG fallback of SVG figures, PyMuPDF for PDF figures.
+Helpers: flows.py lays out `flow:` / `steps:` diagrams, media.py converts figure files,
+preview.py renders slides to PNG.
 
+Unknown keys, overfull slides and other problems are reported as warnings naming the slide.
 See YAML_GUIDE.md for the complete content-file reference and TEMPLATE_GUIDE.md for making templates.
 When you change any YAML key, default, item/chart type, colour, transition or effect here,
 update YAML_GUIDE.md in the same commit - it is the single source of truth for the format.
@@ -25,6 +30,8 @@ from __future__ import annotations
 import argparse
 import copy
 import datetime as _dt
+import difflib
+import hashlib
 import io
 import itertools
 import math
@@ -48,8 +55,12 @@ from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE, PP_PLACEHOLDER
 from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
 from pptx.oxml import parse_xml
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+from pptx.opc.package import Part
 from pptx.oxml.ns import qn
 from pptx.util import Emu, Pt
+
+import flows
+import media
 
 # --------------------------------------------------------------------------------------
 # Constants
@@ -94,13 +105,73 @@ SEMANTIC = {
 }
 BLOCK_COLORS = {"block": "accent1", "alertblock": "accent2", "exampleblock": "accent3"}
 
-ITEM_TYPES = ("bullets", "numbered", "text", "block", "alertblock", "exampleblock", "chart",
-              "table", "image", "placeholder", "plot", "flow", "steps", "math", "code", "columns", "spacer")
+ITEM_TYPES = ("bullets", "numbered", "text", "block", "alertblock", "exampleblock", "chart", "table",
+              "image", "images", "placeholder", "plot", "flow", "steps", "stats", "math", "code", "columns", "spacer")
+LAYOUTS = ("title", "section", "outline", "frame", "plain", "references", "closing")
+
+# ---- what the YAML may contain (checked on every build; unknown keys are reported, not ignored) ----
+META_KEYS = {"title", "subtitle", "author", "institute", "date", "short_title", "short_author", "short_institute",
+             "template", "output", "transition", "valign", "section_style", "outline_title", "layouts"}
+SLIDE_KEYS = {  # besides layout, notes, transition
+    "title": {"title", "subtitle", "author", "institute", "date"},
+    "section": {"title", "subtitle"},
+    "outline": {"title"},
+    "frame": {"title", "subtitle", "content", "valign"},
+    "plain": {"content", "valign"},
+    "references": {"title", "items", "references", "size", "start", "numbered"},
+    "closing": {"title", "subtitle", "text"},
+}
+ITEM_OPTS = {"animate", "build", "name"}          # allowed beside the item key or inside its mapping
+BUILDABLE = {"bullets", "numbered", "flow", "steps", "images", "stats"}
+BLOCK_KEYS = {"title", "text", "bullets", "color", "size"}
+SETTINGS = {  # item settings; plot, flow and steps take theirs from plots.py / flows.py
+    "bullets": {"size", "color"}, "numbered": {"size", "color"},
+    "text": {"size", "align", "color", "bold", "italic"},
+    "math": {"size"}, "code": {"size"}, "spacer": set(), "columns": set(),
+    "block": BLOCK_KEYS, "alertblock": BLOCK_KEYS, "exampleblock": BLOCK_KEYS,
+    "image": {"path", "width", "height", "caption", "alt", "page", "vector"},
+    "images": {"items", "height", "width", "gap", "caption"},
+    "placeholder": {"label", "note", "aspect", "width", "height", "caption", "alt"},
+    "table": {"header", "rows", "style", "align", "widths", "width", "size", "caption"},
+    "chart": {"type", "categories", "series", "stacked", "title", "legend", "labels", "percent", "number_format",
+              "y_title", "x_title", "y_min", "y_max", "smooth", "gap_width", "width", "height", "caption"},
+    "stats": {"items", "size", "color"},
+    "flow": flows.FLOW_KEYS, "steps": flows.STEPS_KEYS,
+}
+MAPPED = {"block", "alertblock", "exampleblock", "image", "placeholder", "table", "chart", "plot", "flow"}
+LISTED = {"steps", "images", "stats"}               # a list (settings beside it) or a mapping with `items`
+SHORT = {"block": "text", "alertblock": "text", "exampleblock": "text", "image": "path", "placeholder": "label"}
+EXAMPLES = {
+    "block": "{title: ..., text: ...}", "alertblock": "{title: ..., text: ...}", "exampleblock": "{title: ..., text: ...}",
+    "image": "{path: fig.svg}", "placeholder": "{label: Diagram}", "table": "{header: [A, B], rows: [[1, 2]]}",
+    "chart": "{type: column, categories: [...], series: {...}}", "plot": "{type: bar, categories: [...], series: {...}}",
+    "flow": "{nodes: [...], edges: ['a -> b']}", "steps": "[Collect, Clean, Train]", "images": "[a.png, b.svg]",
+    "stats": "[{value: '95%', label: accuracy}]",
+}
+CHOICES = {  # (where, key) -> accepted values
+    ("text", "align"): ("left", "center", "right", "justify"),
+    ("slide", "valign"): ("center", "middle", "top", "bottom"),
+    ("column", "valign"): ("center", "middle", "top"),
+    ("table", "style"): ("booktabs", "striped", "grid", "plain"),
+    ("chart", "legend"): ("bottom", "top", "right", "left", "none"),
+}
+SYNONYMS = {"colour": "color", "font_size": "size", "fontsize": "size", "src": "path", "file": "path",
+            "url": "path", "halign": "align", "alignment": "align", "entries": "items", "list": "items"}
+
+# Average character width (em) of common Office fonts in English text, measured and padded ~6% for
+# word wrapping. Text heights are estimated from these; unknown fonts get 0.5, which is safe for all.
+CHAR_W = {"cambria": 0.457, "calibri": 0.436, "calibri light": 0.43, "georgia": 0.476, "times new roman": 0.437,
+          "constantia": 0.462, "arial": 0.482, "helvetica": 0.482, "segoe ui": 0.469, "aptos": 0.469}
 
 MARK = "\u2063"  # invisible separator used to mark math runs until they are converted
 FLOW_MIN_PT = 9   # flow/steps diagrams shrink to fit, but their text not below this size (pt)
 GAP = 0.25        # vertical gap between stacked items (inches)
 COL_GAP = 0.4     # gap between columns (inches)
+STAT_GAP = 0.3    # gap between the cells of a `stats` row (inches)
+MIN_PT = 12       # smallest text size that still reads on a projected slide (pt)
+SVG_EXT = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"
+NS_ASVG = "http://schemas.microsoft.com/office/drawing/2016/SVG/main"
+ALIGN = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT, "justify": PP_ALIGN.JUSTIFY}
 
 
 def inch(v: float) -> Emu:
@@ -135,6 +206,15 @@ def warn(msg: str) -> None:
     print(f"  warning: {msg}", file=sys.stderr)
 
 
+def suggest(key, options) -> str:
+    """' (did you mean 'x'?)' for a misspelt key, else ''."""
+    key = str(key)
+    if SYNONYMS.get(key.lower()) in options:
+        return f" (did you mean '{SYNONYMS[key.lower()]}'?)"
+    hit = difflib.get_close_matches(key.lower(), [str(o) for o in options], n=1, cutoff=0.6)
+    return f" (did you mean '{hit[0]}'?)" if hit else ""
+
+
 def strip_markup(text: str) -> str:
     """Approximate visible text (for size estimates)."""
     t = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", str(text))
@@ -151,8 +231,13 @@ def parse_aspect(v) -> float:
 
 
 def est_lines(text: str, width_in: float, size_pt: float, char_w: float = 0.5) -> int:
+    """Estimated number of lines; **bold** text counts ~8% wider."""
     per_line = max(6.0, width_in * 72.0 / (size_pt * char_w))
-    return sum(max(1, math.ceil(len(seg) / per_line)) for seg in strip_markup(text).split("\n"))
+    total = 0
+    for seg in str(text).split("\n"):
+        bold = sum(len(strip_markup(b)) for b in re.findall(r"\*\*(.+?)\*\*", seg))
+        total += max(1, math.ceil((len(strip_markup(seg)) + 0.08 * bold) / per_line))
+    return total
 
 
 def set_color(font, spec) -> None:
@@ -206,6 +291,22 @@ def drop_style(shape) -> None:
     st = shape._element.find(qn("p:style"))
     if st is not None:
         shape._element.remove(st)
+
+
+AFTER_LATIN = {qn(t) for t in ("a:ea", "a:cs", "a:sym", "a:hlinkClick", "a:hlinkMouseOver", "a:rtl", "a:extLst")}
+
+
+def theme_font(root, ref: str = "+mn-lt") -> None:
+    """Give all text in a chart the theme body font: its rich-text titles would otherwise use Calibri."""
+    for el in list(root.iter(qn("a:defRPr"))) + list(root.iter(qn("a:rPr"))):
+        if el.find(qn("a:latin")) is None:
+            latin = etree.Element(qn("a:latin"))
+            latin.set("typeface", ref)
+            nxt = next((ch for ch in el if ch.tag in AFTER_LATIN), None)
+            if nxt is not None:
+                nxt.addprevious(latin)
+            else:
+                el.append(latin)
 
 
 BU_TAGS = {qn("a:buNone"), qn("a:buAutoNum"), qn("a:buChar"), qn("a:buBlip")}
@@ -334,7 +435,7 @@ class MathEngine:
             except Exception:
                 self.pandoc = None
 
-    def convert(self, formulas):
+    def convert(self, formulas, warn=warn):
         """formulas: list of (latex, display). Returns list of lxml elements (or None)."""
         if not formulas:
             return []
@@ -460,13 +561,16 @@ TRANSITIONS = {
 }
 
 
-def transition_xml(spec) -> str | None:
+def transition_xml(spec, warn=warn) -> str | None:
     if not spec or spec == "none":
         return None
     if isinstance(spec, dict):
         name, speed = spec.get("type", "fade"), spec.get("speed", "med")
     else:
         name, speed = str(spec), "med"
+    if speed not in ("slow", "med", "fast"):
+        warn(f"transition speed '{speed}' is not slow, med or fast - using med")
+        speed = "med"
     if name == "morph":
         return (f'<mc:AlternateContent xmlns:mc="{NS_MC}" {NSDECL}><mc:Choice '
                 f'xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" Requires="p159">'
@@ -551,20 +655,33 @@ def style_sizes(prs):
 # --------------------------------------------------------------------------------------
 class DeckBuilder:
     def __init__(self, content: dict, template: str | None = None, base_dir: str = ".",
-                 substitute_tokens: bool = True, keep_template_slides: bool = False):
+                 substitute_tokens: bool = True, keep_template_slides: bool = False, check_only: bool = False):
         self.meta = content.get("meta", {}) or {}
         self.slides_spec = content.get("slides", []) or []
+        if not isinstance(self.meta, dict) or not isinstance(self.slides_spec, list):
+            raise SystemExit("error: the YAML needs `meta:` (a mapping) and `slides:` (a list)")
         self.base_dir = base_dir
+        self.warnings, self._where = [], "meta"
+        self.check_only = check_only          # lay out and validate only: no conversions, nothing saved
+        self.cache_dir = os.path.join(base_dir, ".ppt-cache")
+        self._media_cache, self._svg_parts = {}, {}
+        self._check("", self.meta, META_KEYS)
+        self._check("layouts", self.meta.get("layouts"), set(DEFAULT_LAYOUTS))
         tpl = template or self.meta.get("template") or DEFAULT_TEMPLATE
         if not os.path.isabs(tpl) and not os.path.exists(tpl):
             cand = os.path.join(base_dir, tpl)
             tpl = cand if os.path.exists(cand) else os.path.join(HERE, tpl)
+        if not os.path.exists(tpl):
+            raise SystemExit(f"error: template not found: {template or self.meta.get('template')} (relative "
+                             f"paths are tried from the YAML's folder, then the ppt-templated folder)")
         self.template_path = tpl
         self.prs = open_template(tpl)
         if not keep_template_slides:
             remove_all_slides(self.prs)
         self.layouts = self._resolve_layouts(self.meta.get("layouts", {}))
         self.level_sizes, self.title_size = style_sizes(self.prs)
+        fonts = self._theme()[1]  # character widths of the body and heading fonts, for text estimates
+        self.cw, self.cw_head = (CHAR_W.get(str(fonts[k]).lower(), 0.5) for k in ("minor", "major"))
         self.W, self.H = to_in(self.prs.slide_width), to_in(self.prs.slide_height)
         self.area = self._content_area()
         self.math_jobs = []       # (latex, display, run-properties element)
@@ -631,44 +748,93 @@ class DeckBuilder:
         cp = self.prs.core_properties
         cp.title, cp.author = str(m.get("title", "")), str(m.get("author", ""))
 
-        slides = []
         for i, spec in enumerate(self.slides_spec, 1):
             if not isinstance(spec, dict):
-                warn(f"slide {i} is not a mapping - skipped")
+                self._where = f"YAML slide {i}"
+                self.warn("not a mapping (start it with `- title: ...` or `- layout: ...`) - skipped")
                 continue
+            n, label = len(self.prs.slides) + 1, spec.get("title")
+            self._where = (f'slide {n} "{strip_markup(str(label))[:50]}"' if label
+                           else f"slide {n} ({spec.get('layout', 'frame')})")
             try:
-                slides.append((self._build_slide(spec), spec))
-            except Exception as exc:  # keep going, report clearly
-                raise SystemExit(f"Error on slide {i} ({spec.get('title', spec.get('layout', ''))}): {exc}")
-        self._finalize_math([s for s, _ in slides])
+                self._build_slide(spec)
+            except SystemExit:
+                raise
+            except Exception as exc:  # stop at the first bad slide and name it
+                kind = "" if isinstance(exc, (ValueError, FileNotFoundError)) else f"{type(exc).__name__}: "
+                raise SystemExit(f"error: {self._where}: {kind}{exc}") from None
+        self._where = ""
+        if not self.check_only:
+            self._finalize_math(list(self.prs.slides))
         return self.prs
+
+    # ---- problems ----------------------------------------------------------------------
+    def warn(self, msg: str) -> None:
+        line = f"{self._where}: {msg}" if self._where else msg
+        if line not in self.warnings:
+            self.warnings.append(line)
+            warn(line)
+
+    def _check(self, where, d, allowed):
+        """Report keys of mapping d that are not allowed (with a guess) and values outside CHOICES."""
+        if not isinstance(d, dict):
+            return
+        head = f"{where}: " if where else ""
+        for k, v in d.items():
+            if k not in allowed:
+                hint = (" - content items go in the list under content:" if k in ITEM_TYPES and where == ""
+                        else suggest(k, allowed))
+                self.warn(f"{head}unknown key '{k}'{hint} - ignored")
+            else:
+                ok = CHOICES.get((where or "slide", k))
+                if ok and v is not None and str(v).lower() not in ok:
+                    self.warn(f"{head}{k}: '{v}' is not one of {', '.join(ok)}")
 
     # ---- slides ------------------------------------------------------------------------
     def _build_slide(self, spec):
         kind = spec.get("layout", "frame")
+        if kind not in LAYOUTS:
+            self.warn(f"unknown layout '{kind}'{suggest(kind, LAYOUTS)} - built as a frame")
+            kind = "frame"
+        if kind in ("frame", "plain") and "content" not in spec and any(k in ITEM_TYPES for k in spec):
+            moved = [k for k in spec if k in ITEM_TYPES]   # e.g. `bullets:` written on the slide itself
+            self.warn(f"'{', '.join(moved)}' written on the slide itself; content items go in the list under "
+                      f"content: - moved there")
+            spec = {**{k: v for k, v in spec.items() if k not in moved},
+                    "content": [{k: spec[k]} for k in moved]}
+        self._check("", spec, SLIDE_KEYS[kind] | {"layout", "notes", "transition"})
         self.steps, self.builds = [], {}
         if kind == "title":
-            slide = self._title_slide(spec)
+            slides = [self._title_slide(spec)]
         elif kind == "section":
             self.section_no += 1
             if self.meta.get("section_style") == "outline":
-                slide = self._outline_slide(spec, current=self.section_no, title=self.meta.get("outline_title", "Outline"))
+                slides = [self._outline_slide(spec, current=self.section_no,
+                                              title=self.meta.get("outline_title", "Outline"))]
             else:
-                slide = self._section_slide(spec)
+                slides = [self._section_slide(spec)]
         elif kind == "outline":
-            slide = self._outline_slide(spec, current=None, title=spec.get("title", "Outline"))
+            slides = [self._outline_slide(spec, current=None, title=spec.get("title", "Outline"))]
         elif kind == "plain":
             slide = self.prs.slides.add_slide(self.layouts["plain"])
             self._remove_empty_placeholders(slide, keep=set())
             m = 0.6
-            self._render_items(slide, spec.get("content", []), Box(m, m, self.W - 2 * m, self.H - 2 * m),
+            self._render_items(slide, self._prepare(spec.get("content")), Box(m, m, self.W - 2 * m, self.H - 2 * m),
                                spec.get("valign", "center"))
+            slides = [slide]
+        elif kind == "references":
+            slides = self._references_slides(spec)
+        elif kind == "closing":
+            slides = [self._closing_slide(spec)]
         else:
-            slide = self._frame_slide(spec)
-        if spec.get("notes"):
-            slide.notes_slide.notes_text_frame.text = str(spec["notes"]).strip()
-        self._apply_timing(slide, spec.get("transition", self.meta.get("transition")))
-        return slide
+            slides = [self._frame_slide(spec)]
+        for k, slide in enumerate(slides):
+            if k:
+                self.steps, self.builds = [], {}
+            if spec.get("notes") and k == 0:
+                slide.notes_slide.notes_text_frame.text = str(spec["notes"]).strip()
+            self._apply_timing(slide, spec.get("transition", self.meta.get("transition")))
+        return slides
 
     def _set_title(self, slide, text, subtitle=None, fit_width=None):
         ph = slide.shapes.title
@@ -678,9 +844,11 @@ class DeckBuilder:
         tf.clear()
         size = self.title_size
         width = fit_width or to_in(ph.width) or self.W - 1
-        lines = est_lines(text, width - 0.2, size)
+        lines = est_lines(text, width - 0.2, size, self.cw_head)
         if lines > 1:  # beamer-like: shrink long frame titles instead of overflowing the bar
             size = max(size * 0.72, size / lines ** 0.5)
+            if est_lines(text, width - 0.2, size, self.cw_head) > 1:
+                self.warn(f"title wraps even at {size:.0f} pt ({len(strip_markup(text))} characters) - shorten it")
         p = tf.paragraphs[0]
         self._add_runs(p, str(text), {"size": size if size != self.title_size else None})
         if subtitle:
@@ -701,7 +869,7 @@ class DeckBuilder:
         if title_ph is not None:
             title_ph.text_frame.clear()
             size = None
-            lines = est_lines(str(m.get("title", "")), to_in(title_ph.width) - 0.5, 36)
+            lines = est_lines(str(m.get("title", "")), to_in(title_ph.width) - 0.5, 36, self.cw_head)
             if lines > 2:
                 size = 28
             self._add_runs(title_ph.text_frame.paragraphs[0], str(m.get("title", "")), {"size": size})
@@ -763,7 +931,7 @@ class DeckBuilder:
         return slide
 
     def _frame_slide(self, spec):
-        items = [self._norm_item(i) for i in (spec.get("content") or [])]
+        items = self._prepare(spec.get("content"))
         valign = spec.get("valign", self.valign)
         # 1) a single bullet list -> the real body placeholder of "Title and Content"
         if len(items) == 1 and items[0][0] in ("bullets", "numbered") and not items[0][1].get("size"):
@@ -776,7 +944,7 @@ class DeckBuilder:
                 return slide
         # 2) two columns that are each one bullet list -> "Two Content" placeholders
         if (len(items) == 1 and items[0][0] == "columns" and self.layouts["columns"] is not None):
-            cols = self._norm_columns(items[0][1]["columns"])
+            cols = items[0][1]["columns"]
             simple = (len(cols) == 2 and all(len(c["content"]) == 1 and c["content"][0][0] in ("bullets", "numbered")
                                              and not c.get("width") for c in cols))
             if simple:
@@ -805,27 +973,86 @@ class DeckBuilder:
                 self.prs.part.drop_rel(sldId.rId)
                 lst.remove(sldId)
 
-    # ---- items: normalisation & measuring ---------------------------------------------
-    def _norm_item(self, item):
+    # ---- items: normalisation (once per slide) & measuring -------------------------------
+    def _prepare(self, content):
+        """Content list -> [(kind, item)]: shorthands expanded, settings merged, keys checked."""
+        if content is None:
+            return []
+        if not isinstance(content, list):
+            raise ValueError("content must be a list: start each item with '- '")
+        return [self._prepare_item(i) for i in content]
+
+    def _prepare_item(self, item):
         if isinstance(item, tuple):
             return item
-        if isinstance(item, str):
-            return ("text", {"text": item})
+        if isinstance(item, str) or (isinstance(item, (int, float)) and not isinstance(item, bool)):
+            return "text", {"text": str(item)}
         if isinstance(item, list):
-            return ("bullets", {"bullets": item})
-        if not isinstance(item, dict):
-            raise ValueError(f"cannot understand content item: {item!r}")
-        for t in ITEM_TYPES:
-            if t in item:
-                return (t, item)
-        raise ValueError(f"content item needs one of {', '.join(ITEM_TYPES)}: {item!r}")
+            return "bullets", {"bullets": item}
+        if not isinstance(item, dict) or not item:
+            raise ValueError(f"cannot understand content item {item!r}")
+        kind = next((k for k in item if k in ITEM_TYPES), None)
+        if kind is None:
+            raise ValueError(f"content item {{{', '.join(map(str, item))}}} has no content key"
+                             f"{suggest(next(iter(item)), ITEM_TYPES)}; use one of: {', '.join(ITEM_TYPES)}")
+        v = item[kind]
+        opts = {k: item[k] for k in ITEM_OPTS if k in item}
+        rest = {k: x for k, x in item.items() if k != kind and k not in ITEM_OPTS}
+        clash = [k for k in rest if k in ITEM_TYPES and k not in self._allowed(kind, v)]
+        if clash:
+            raise ValueError(f"one item has two content keys, '{kind}' and '{clash[0]}': "
+                             f"make them two items, each starting with '- '")
+        if kind in MAPPED or kind in LISTED:
+            if isinstance(v, dict):
+                inner = dict(v)
+            elif kind in LISTED and isinstance(v, list):
+                inner = {"items": v}
+            elif kind == "table" and isinstance(v, list):
+                inner = {"rows": v}
+            elif kind in SHORT and v is not None and not isinstance(v, (list, dict)):
+                inner = {SHORT[kind]: v}
+            else:
+                raise ValueError(f"{kind} needs settings, e.g. {kind}: {EXAMPLES[kind]}")
+            for k in ITEM_OPTS & set(inner):  # animate / build / name written inside the mapping: move out
+                opts.setdefault(k, inner.pop(k))
+            inner = {**rest, **inner}           # settings written beside the item key count as well
+            self._check(kind, inner, self._allowed(kind, inner))
+            out = {kind: inner}
+        elif kind == "columns":
+            self._check(kind, rest, set())
+            out = {kind: self._prepare_columns(v)}
+        else:
+            self._check(kind, rest, SETTINGS[kind])
+            out = {kind: v, **rest}
+        for k in opts:
+            if kind == "spacer" or (kind == "columns" and k != "animate"):
+                self.warn(f"{kind}: {k} does not work here; put it on the items inside")
+            elif k == "build" and kind not in BUILDABLE:
+                self.warn(f"{kind}: build works on {', '.join(sorted(BUILDABLE))} only - use animate")
+        out.update(opts)
+        return kind, out
 
-    def _norm_columns(self, cols):
+    @staticmethod
+    def _allowed(kind, inner):
+        if kind == "plot":
+            import plots  # only decks with plots need matplotlib
+            return plots.keys(inner.get("type") if isinstance(inner, dict) else None)
+        return SETTINGS[kind]
+
+    def _prepare_columns(self, cols):
+        if not isinstance(cols, list) or not cols:
+            raise ValueError("columns needs a list of columns, e.g. columns: [[...items...], [...items...]]")
         out = []
         for c in cols:
             if isinstance(c, list):
                 c = {"content": c}
-            out.append({**c, "content": [self._norm_item(i) for i in (c.get("content") or [])]})
+            elif not isinstance(c, dict):
+                c = {"content": [c]}
+            elif "content" not in c and any(k in ITEM_TYPES for k in c):  # one item written as the column
+                c = {**{k: c[k] for k in ("width", "valign") if k in c},
+                     "content": [{k: x for k, x in c.items() if k not in ("width", "valign")}]}
+            self._check("column", c, {"content", "width", "valign", "animate"})
+            out.append({**c, "content": self._prepare(c.get("content"))})
         return out
 
     def _sz(self, level, scale, opts):
@@ -839,7 +1066,7 @@ class DeckBuilder:
         for lvl, text in paras:
             size = self._sz(lvl, scale, opts)
             avail = width - (0.36 * (lvl + 1) if indent else 0) - 0.05
-            h += est_lines(text, avail, size) * size * 1.2 / 72 + (8 if lvl == 0 else 4) / 72
+            h += est_lines(text, avail, size, self.cw) * size * 1.2 / 72 + (8 if lvl == 0 else 4) / 72
         return h + 0.12
 
     def _measure(self, kind, it, w, scale):
@@ -861,13 +1088,19 @@ class DeckBuilder:
             return head + body + 0.12, False, 0
         if kind == "chart":
             c = it["chart"]
-            pref = float(c.get("height", 4.2))
-            return pref, True, min(pref, 2.2)
+            cap = 0.4 if c.get("caption") else 0
+            pref = float(c.get("height", 4.2)) + cap
+            return pref, True, min(pref, 2.2 + cap)
         if kind == "table":
             t = it["table"]
-            size = (t.get("size") or self.level_sizes[0] * 0.78) * scale
-            rows = len(t.get("rows", [])) + (1 if t.get("header") else 0)
-            return rows * (size * 2.05 / 72), False, 0
+            return sum(self._table_geometry(t, w, scale)[4]) + (0.4 if t.get("caption") else 0), False, 0
+        if kind == "images":
+            spec, figs = self._images_spec(it)
+            img_h, _, sub, cap = self._images_geometry(spec, figs, w)
+            pref = img_h + sub + cap
+            return pref, True, min(pref, 1.2 + sub + cap)
+        if kind == "stats":
+            return self._stats_geometry(it, w, scale)[4], False, 0
         if kind == "plot":
             p, ratio = self._figure(kind, it)
             if ratio is None:
@@ -892,7 +1125,7 @@ class DeckBuilder:
         if kind == "math":
             tex = str(it["math"])
             tall = any(k in tex for k in ("\\frac", "\\sum", "\\int", "\\prod", "\\begin", "\\sqrt", "\\over"))
-            return ((1.05 if tall else 0.7) * scale * self.level_sizes[0] / 22), False, 0
+            return (1.05 if tall else 0.7) * self._sz(0, scale, it) / 22, False, 0
         if kind == "code":
             n = len(str(it["code"]).rstrip("\n").split("\n"))
             size = (it.get("size") or self.level_sizes[0] * 0.7) * scale
@@ -900,8 +1133,11 @@ class DeckBuilder:
         if kind == "spacer":
             return float(it["spacer"]), False, 0
         if kind == "columns":
-            cols = self._norm_columns(it["columns"])
+            cols = it["columns"]
             widths = self._col_widths(cols, w)
+            rows = self._block_rows(cols, widths, scale)
+            if rows:
+                return sum(rows) + GAP * (len(rows) - 1), False, 0
             pref, mins, flex = 0.0, 0.0, False
             for c, cw in zip(cols, widths):
                 ms = [self._measure(k, i, cw, scale) for k, i in c["content"]]
@@ -919,27 +1155,32 @@ class DeckBuilder:
         free = max(0.0, 1.0 - fixed) / max(1, sum(1 for g in given if not g))
         return [avail * (float(g) if g else free) for g in given]
 
+    def _block_rows(self, cols, widths, scale):
+        """Row heights when every column holds the same number of blocks, else None. Blocks side by
+        side then share one height and their tops line up, like Beamer's [T] columns."""
+        n = len(cols[0]["content"])
+        if len(cols) < 2 or not n or any(len(c["content"]) != n or any(k not in BLOCK_COLORS for k, _ in c["content"])
+                                         for c in cols):
+            return None
+        return [max(self._measure(*c["content"][r], cw, scale)[0] for c, cw in zip(cols, widths)) for r in range(n)]
+
     def _figure(self, kind, it):
-        """(spec, width/height ratio) of an image or placeholder item; both accept a short form."""
-        v = it[kind]
+        """(spec, width/height ratio) of an image, placeholder or plot (ratio None = fill the area)."""
+        spec = it[kind]
         if kind == "image":
-            spec = v if isinstance(v, dict) else {"path": v}
-            return spec, self._image_ratio(spec)
+            return spec, self._media(spec).ratio
         if kind == "plot":
-            if not isinstance(v, dict):
-                raise ValueError("plot needs settings, e.g. {type: bar, categories: [...], series: {...}}")
-            return v, (parse_aspect(v["aspect"]) if v.get("aspect") else None)
-        spec = v if isinstance(v, dict) else {"label": v}
+            return spec, (parse_aspect(spec["aspect"]) if spec.get("aspect") else None)
         return spec, parse_aspect(spec.get("aspect", "16:9"))
 
-    def _image_ratio(self, im):
-        path = self._path(im["path"])
-        try:
-            from PIL import Image
-            with Image.open(path) as img:
-                return img.width / img.height
-        except Exception:
-            return 16 / 9
+    def _media(self, spec):
+        """The figure file of an image spec ({path, page}), read once per build (see media.py)."""
+        if not spec.get("path"):
+            raise ValueError("image needs a path, e.g. image: assets/fig.svg")
+        key = (str(spec["path"]), int(spec.get("page") or 1))
+        if key not in self._media_cache:
+            self._media_cache[key] = media.load(self._path(key[0]), key[1])
+        return self._media_cache[key]
 
     def _path(self, p):
         return p if os.path.isabs(p) else os.path.join(self.base_dir, p)
@@ -963,19 +1204,22 @@ class DeckBuilder:
 
     # ---- items: rendering ---------------------------------------------------------------
     def _render_items(self, slide, items, box, valign="center", scale=None):
-        items = [self._norm_item(i) for i in items]
+        items = self._prepare(items)
         if not items:
             return
         if scale is None:
             for scale in (1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65):
                 heights, total = self._plan(items, box, scale)
                 if total <= box.h + 0.02:
+                    if scale < 0.9:
+                        self.warn(f"text shrunk to {scale:.0%} to fit - consider less content or two slides")
                     break
             else:
-                title = slide.shapes.title.text_frame.text if slide.shapes.title else "(untitled)"
-                warn(f"content does not fit on slide '{title}' - consider splitting it")
+                self.warn(f"content does not fit even at 65% (needs {total:.1f} in, has {box.h:.1f} in) "
+                          f"- split the slide or cut content")
         heights, total = self._plan(items, box, scale)
-        y = box.y + (max(0.0, box.h - total) / 2 if valign in ("center", "middle") else 0)
+        free = max(0.0, box.h - total)
+        y = box.y + {"top": 0.0, "bottom": free}.get(valign, free / 2)
         for (kind, it), h in zip(items, heights):
             self._render(slide, kind, it, Box(box.x, y, box.w, h), scale)
             y += h + GAP
@@ -1004,6 +1248,10 @@ class DeckBuilder:
             self._render_table(slide, it, b, scale)
         elif kind == "image":
             self._render_image(slide, it, b, scale)
+        elif kind == "images":
+            self._render_images(slide, it, b, scale)
+        elif kind == "stats":
+            self._render_stats(slide, it, b, scale)
         elif kind == "placeholder":
             self._render_placeholder(slide, it, b, scale)
         elif kind == "plot":
@@ -1020,12 +1268,25 @@ class DeckBuilder:
         elif kind == "code":
             self._render_code(slide, it, b, scale)
         elif kind == "columns":
-            cols = self._norm_columns(it["columns"])
+            cols = it["columns"]
             widths = self._col_widths(cols, b.w)
-            x = b.x
+            rows = self._block_rows(cols, widths, scale)
+            y0 = b.y + max(0.0, (b.h - sum(rows) - GAP * (len(rows) - 1)) / 2) if rows else b.y
+            x, start = b.x, len(slide.shapes)
             for c, cw in zip(cols, widths):
-                self._render_items(slide, c["content"], Box(x, b.y, cw, b.h), c.get("valign", "center"), scale)
+                col_start = len(slide.shapes)
+                if rows:  # blocks side by side: one height per row, tops aligned
+                    y = y0
+                    for (k, i), rh in zip(c["content"], rows):
+                        self._render(slide, k, i, Box(x, y, cw, rh), scale)
+                        y += rh + GAP
+                else:
+                    self._render_items(slide, c["content"], Box(x, b.y, cw, b.h), c.get("valign", "center"), scale)
+                if c.get("animate"):
+                    self._animate_new(slide, col_start, c)
                 x += cw + COL_GAP
+            if it.get("animate"):
+                self._animate_new(slide, start, it)
         if it.get("name") and kind not in ("columns", "spacer") and self._last_main is not None:
             self._last_main.name = "!!" + str(it["name"])  # "!!" prefix = Morph matches objects by name
 
@@ -1064,6 +1325,8 @@ class DeckBuilder:
         have = to_in(ph.height)
         if need > have:  # same thing PowerPoint's "shrink text on overflow" stores in the file
             scale = max(0.55, have / need)
+            if scale < 0.9:
+                self.warn(f"bullets shrunk to {scale:.0%} to fit - use fewer or shorter bullets")
             bp = tf._txBody.find(qn("a:bodyPr"))
             for ch in list(bp):
                 if ch.tag in (qn("a:normAutofit"), qn("a:spAutoFit"), qn("a:noAutofit")):
@@ -1085,11 +1348,10 @@ class DeckBuilder:
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
             if style.get("_nobullet", True):
                 set_bullet(p, "none")
-            if align:
-                p.alignment = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT,
-                               "justify": PP_ALIGN.JUSTIFY}[align]
-            self._add_runs(p, line, {"size": size, "color": style.get("color"),
-                                     "bold": style.get("bold"), "italic": style.get("italic")})
+            if str(align).lower() in ALIGN:  # anything else was reported by the key check
+                p.alignment = ALIGN[str(align).lower()]
+            self._add_runs(p, line, {"size": size, "color": style.get("color"), "bold": style.get("bold"),
+                                     "italic": style.get("italic"), "font": style.get("_font")})
 
     # inline formatting: **bold**  *italic*  `code`  ==alert==  [link](url)  $math$
     INLINE = re.compile(r"\*\*(?P<b>.+?)\*\*|==(?P<alert>.+?)==|(?<![\w*])\*(?P<i>[^*\s][^*]*?)\*(?![\w*])"
@@ -1251,7 +1513,8 @@ class DeckBuilder:
                 data.add_series(str(name), vals, number_format=c.get("number_format"))
         w = b.w * float(c.get("width", 1.0))
         x = b.x + (b.w - w) / 2
-        gf = slide.shapes.add_chart(xl, inch(x), inch(b.y), inch(w), inch(b.h), data)
+        cap = 0.4 if c.get("caption") else 0
+        gf = slide.shapes.add_chart(xl, inch(x), inch(b.y), inch(w), inch(b.h - cap), data)
         gf.name = f"Chart: {c.get('title', ctype)}"
         chart = gf.chart
         fs = round(self.level_sizes[0] * 0.66 * scale, 1)
@@ -1270,8 +1533,8 @@ class DeckBuilder:
         legend = c.get("legend", "bottom" if (n_series > 1 or pie) else "none")
         if legend and legend != "none":
             chart.has_legend = True
-            chart.legend.position = {"bottom": XL_LEGEND_POSITION.BOTTOM, "right": XL_LEGEND_POSITION.RIGHT,
-                                     "top": XL_LEGEND_POSITION.TOP, "left": XL_LEGEND_POSITION.LEFT}[legend]
+            chart.legend.position = {"right": XL_LEGEND_POSITION.RIGHT, "top": XL_LEGEND_POSITION.TOP,
+                                     "left": XL_LEGEND_POSITION.LEFT}.get(legend, XL_LEGEND_POSITION.BOTTOM)
             chart.legend.include_in_layout = False
             chart.legend.font.size = Pt(fs)
         else:
@@ -1345,24 +1608,55 @@ class DeckBuilder:
                 dl.position = XL_LABEL_POSITION.OUTSIDE_END
             elif ctype.startswith("line"):
                 dl.position = XL_LABEL_POSITION.ABOVE
+        theme_font(chart._chartSpace)
         self._animate(it, gf, "graphic")
+        self._caption(slide, it, c, b, b.y + b.h - cap, scale)
 
     # ---- tables -------------------------------------------------------------------------
-    def _render_table(self, slide, it, b, scale):
-        t = it["table"]
+    def _table_geometry(self, t, w, scale):
+        """-> (rows incl. header, font size, table width, column widths, row heights). The heights allow
+        for wrapped text: that much space is kept free below the table for PowerPoint to grow its rows."""
         header = t.get("header")
-        rows = [list(map(lambda v: "" if v is None else str(v), r)) for r in t.get("rows", [])]
-        all_rows = ([list(map(str, header))] if header else []) + rows
+        cells = lambda r: ["" if v is None else str(v) for v in (r if isinstance(r, list) else [r])]  # noqa: E731
+        all_rows = ([cells(header)] if header else []) + [cells(r) for r in t.get("rows") or []]
+        if not all_rows:
+            raise ValueError("table needs rows, e.g. rows: [[a, b], [c, d]] (header: [A, B] is optional)")
         ncols = max(len(r) for r in all_rows)
         all_rows = [r + [""] * (ncols - len(r)) for r in all_rows]
         size = round((t.get("size") or self.level_sizes[0] * 0.78) * scale, 1)
-        need = [max(len(strip_markup(r[j])) for r in all_rows) * size * 0.55 / 72 + 0.35 for j in range(ncols)]
+        cols = [[strip_markup(r[j]) for r in all_rows] for j in range(ncols)]
+        need = [max(map(len, c)) * size * 0.55 / 72 + 0.35 for c in cols]  # every cell on one line
+        width = w * float(t["width"]) if t.get("width") else min(w, max(sum(need) * 1.25, w * 0.55))
         if t.get("widths"):
-            need = [float(x) for x in t["widths"]]
-        width = b.w * float(t["width"]) if t.get("width") else min(b.w, max(sum(need) * 1.25, b.w * 0.55))
-        colw = [width * n / sum(need) for n in need]
+            given = [float(x) for x in t["widths"]][:ncols]
+            given += [sum(given) / len(given)] * (ncols - len(given))
+            colw = [width * g / sum(given) for g in given]
+        elif sum(need) <= width:
+            colw = [width * n / sum(need) for n in need]
+        else:  # short columns keep one line; the long ones share the rest, never narrower than a word
+            short = [n <= width / ncols for n in need]
+            rest = width - sum(n for n, s in zip(need, short) if s)
+            longs = sum(n for n, s in zip(need, short) if not s)
+            colw = [n if s else rest * n / longs for n, s in zip(need, short)]
+            for j, c in enumerate(cols):
+                word = max((len(x) for cell in c for x in cell.split()), default=1) * size * 0.6 / 72 + 0.3
+                if colw[j] < word:
+                    k = max(range(ncols), key=lambda i: colw[i])
+                    colw[k] -= word - colw[j]
+                    colw[j] = word
+        heights = [size * (1.2 * max(est_lines(c, cw - 0.2, size, self.cw * (1.08 if header and i == 0 else 1))
+                                     for c, cw in zip(r, colw)) + 0.85) / 72 for i, r in enumerate(all_rows)]
+        return all_rows, size, width, colw, heights
+
+    def _render_table(self, slide, it, b, scale):
+        t = it["table"]
+        header = t.get("header")
+        all_rows, size, width, colw, heights = self._table_geometry(t, b.w, scale)
+        rows = all_rows[1:] if header else all_rows
+        ncols = len(colw)
         x = b.x + (b.w - width) / 2
-        gf = slide.shapes.add_table(len(all_rows), ncols, inch(x), inch(b.y), inch(width), inch(b.h))
+        gf = slide.shapes.add_table(len(all_rows), ncols, inch(x), inch(b.y), inch(width),
+                                    inch(len(all_rows) * size * 2.05 / 72))
         gf.name = "Table"
         tbl = gf.table
         style = t.get("style", "booktabs")
@@ -1375,11 +1669,11 @@ class DeckBuilder:
         sid.text = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"  # "No Style, No Grid": we draw our own rules
         for j, cw in enumerate(colw):
             tbl.columns[j].width = inch(cw)
-        rh = b.h / len(all_rows)
-        for i in range(len(all_rows)):
-            tbl.rows[i].height = inch(rh)
+        for i in range(len(all_rows)):  # one line each: PowerPoint grows rows that wrap, inside the space reserved
+            tbl.rows[i].height = inch(size * 2.05 / 72)
         align = t.get("align")
         numeric = re.compile(r"^[\s$€£+\-−]*[\d.,]+\s*[%kKmMbB×x]*\s*$")
+        prose = [max((len(strip_markup(r[j])) for r in rows), default=0) > 30 for j in range(ncols)]  # left-aligned
         last = len(all_rows) - 1
         for i, row in enumerate(all_rows):
             is_head = bool(header) and i == 0
@@ -1395,10 +1689,12 @@ class DeckBuilder:
                     a = align[j] if j < len(align) else "l"
                 else:
                     # test the visible text, so **12M** or ==86.2%== still count as numbers
-                    a = "r" if (numeric.match(strip_markup(val)) and not is_head and j > 0) else ("l" if j == 0 else "c")
+                    a = "r" if (numeric.match(strip_markup(val)) and not is_head and j > 0) else (
+                        "l" if j == 0 or prose[j] else "c")
                     if is_head and j > 0 and all(numeric.match(strip_markup(r[j])) for r in rows if r[j]):
                         a = "r"
-                p.alignment = {"l": PP_ALIGN.LEFT, "c": PP_ALIGN.CENTER, "r": PP_ALIGN.RIGHT}[a]
+                p.alignment = {"l": PP_ALIGN.LEFT, "c": PP_ALIGN.CENTER, "r": PP_ALIGN.RIGHT}.get(str(a).lower()[:1],
+                                                                                                PP_ALIGN.LEFT)
                 st = {"size": size, "bold": True if is_head else None}
                 if style == "striped" and is_head:
                     st["color"] = "white"
@@ -1420,6 +1716,7 @@ class DeckBuilder:
                     fill = ("accent1", 0.0) if is_head else (("accent1", 0.9) if i % 2 == 0 else None)
                 self._cell_format(cell, borders, fill)
         self._animate(it, gf, "table")
+        self._caption(slide, it, t, b, b.y + sum(heights), scale)
 
     def _cell_format(self, cell, borders, fill):
         tcPr = cell._tc.get_or_add_tcPr()
@@ -1451,16 +1748,45 @@ class DeckBuilder:
     # ---- images -------------------------------------------------------------------------
     def _render_image(self, slide, it, b, scale):
         im, ratio = self._figure("image", it)
-        path = self._path(im["path"])
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"image not found: {path}")
         x, y, w, h = self._figure_box(im, ratio, b)
-        pic = slide.shapes.add_picture(path, inch(x), inch(y), inch(w), inch(h))
-        pic.name = im.get("alt", os.path.basename(path))
+        pic = self._add_figure(slide, self._media(im), (x, y, w, h), im.get("vector", True))
+        pic.name = str(im.get("alt") or os.path.basename(str(im["path"])))
         if im.get("alt"):
             pic._element.nvPicPr.cNvPr.set("descr", str(im["alt"]))
         self._animate(it, pic, "pic")
         self._caption(slide, it, im, b, y + h, scale)
+
+    def _add_figure(self, slide, m, box, vector=True):
+        """Picture of a figure file filling box (x, y, w, h), which has the figure's aspect ratio. A vector
+        figure is embedded as SVG plus a PNG fallback drawn at exactly this size (vector: false = PNG only)."""
+        w, h = box[2], box[3]
+        name = os.path.basename(m.path)
+        if m.kind == "raster":
+            if m.px[0] / w < 100:
+                self.warn(f"{name} is only {m.px[0] / w:.0f} dpi at this size - use a larger image or an SVG")
+            return self._picture(slide, box, media.raster_bytes(m, w))
+        png = None if self.check_only else media.png_fallback(m, w, h, self.cache_dir)
+        if png is None and not self.check_only:
+            self.warn(f"{name}: no SVG renderer (Chrome/Edge, or pip install cairosvg) - PowerPoint 2019+ shows "
+                      f"the SVG, other viewers an empty box")
+        return self._picture(slide, box, png or media.blank_png(), m.data if vector or png is None else None)
+
+    def _picture(self, slide, box, raster, svg=None):
+        """Add a picture; with svg, PowerPoint 2019+ draws the SVG and other viewers the raster."""
+        x, y, w, h = box
+        pic = slide.shapes.add_picture(io.BytesIO(raster), inch(x), inch(y), inch(w), inch(h))
+        if svg:
+            key = hashlib.sha1(svg).hexdigest()
+            if key not in self._svg_parts:  # one part per distinct SVG, shared by every slide that uses it
+                package = self.prs.part.package
+                self._svg_parts[key] = Part(package.next_partname("/ppt/media/image%d.svg"), "image/svg+xml",
+                                            package, svg)
+            rid = slide.part.relate_to(self._svg_parts[key], RT.IMAGE)
+            ext = etree.SubElement(etree.SubElement(pic._element.find(f".//{qn('a:blip')}"), qn("a:extLst")),
+                                   qn("a:ext"))
+            ext.set("uri", SVG_EXT)
+            etree.SubElement(ext, f"{{{NS_ASVG}}}svgBlip", nsmap={"asvg": NS_ASVG}).set(qn("r:embed"), rid)
+        return pic
 
     def _render_placeholder(self, slide, it, b, scale):
         """A native dashed box that reserves a figure's space; swap it later via Shape Fill > Picture."""
@@ -1501,31 +1827,221 @@ class DeckBuilder:
                 ratio = min(ratio, 1.2)
         x, y, w, h = self._figure_box({"width": 1.0, **p}, ratio, b)
         colors, fonts = self._theme()
-        png = plots.render(p, colors, fonts["minor"], w, h, round(self.level_sizes[0] * 0.66 * scale, 1))
-        pic = slide.shapes.add_picture(io.BytesIO(png), inch(x), inch(y), inch(w), inch(h))
+        vector = bool(p.get("vector", True)) and not self.check_only
+        out = plots.render(p, colors, fonts["minor"], w, h, round(self.level_sizes[0] * 0.66 * scale, 1), vector)
+        png, svg = out if vector else (out, None)
+        pic = self._picture(slide, (x, y, w, h), png, svg)
         label = p.get("title") or p.get("ylabel") or p.get("type")
         pic.name = f"Plot: {strip_markup(str(label))[:40]}"
         pic._element.nvPicPr.cNvPr.set("descr", str(p.get("alt") or f"{p.get('type')} plot: {label}"))
         self._animate(it, pic, "pic")
         self._caption(slide, it, p, b, y + h, scale)
 
+    # ---- images: a row of figures at one height -------------------------------------------
+    def _images_spec(self, it):
+        spec = it["images"]
+        entries = spec.get("items")
+        if not isinstance(entries, list) or not entries:
+            raise ValueError(f"images needs a list of figure paths, e.g. images: {EXAMPLES['images']}")
+        figs = []
+        for e in entries:
+            e = e if isinstance(e, dict) else {"path": e}
+            self._check("images entry", e, {"path", "caption", "alt", "page", "vector"})
+            figs.append((e, self._media(e)))
+        return spec, figs
+
+    @staticmethod
+    def _images_geometry(spec, figs, w, h=None):
+        """(common figure height, gap, sub-caption height, caption height) of a row w wide (and h high)."""
+        gap = float(spec.get("gap", 0.25))
+        sub = 0.4 if any(e.get("caption") for e, _ in figs) else 0
+        cap = 0.4 if spec.get("caption") else 0
+        img_h = (w * float(spec.get("width", 1.0)) - gap * (len(figs) - 1)) / sum(m.ratio for _, m in figs)
+        if spec.get("height"):
+            img_h = min(img_h, float(spec["height"]))
+        if h is not None:
+            img_h = min(img_h, h - sub - cap)
+        return max(img_h, 0.1), gap, sub, cap
+
+    def _render_images(self, slide, it, b, scale):
+        spec, figs = self._images_spec(it)
+        img_h, gap, sub, cap = self._images_geometry(spec, figs, b.w, b.h)
+        x = b.x + (b.w - img_h * sum(m.ratio for _, m in figs) - gap * (len(figs) - 1)) / 2
+        y = b.y + max(0.0, (b.h - img_h - sub - cap) / 2)
+        size = round(self.level_sizes[0] * 0.66 * scale, 1)
+        parts = []  # [picture, caption?] per figure
+        for e, m in figs:
+            w = img_h * m.ratio
+            pic = self._add_figure(slide, m, (x, y, w, img_h), e.get("vector", True))
+            pic.name = str(e.get("alt") or os.path.basename(str(e["path"])))
+            if e.get("alt"):
+                pic._element.nvPicPr.cNvPr.set("descr", str(e["alt"]))
+            parts.append([pic])
+            if e.get("caption"):
+                tb = slide.shapes.add_textbox(inch(x - gap / 2), inch(y + img_h + 0.04), inch(w + gap),
+                                              inch(sub - 0.04))
+                self._prep_tf(tb.text_frame)
+                self._fill_text(tb.text_frame, str(e["caption"]), size=size, style={"color": "muted"}, align="center")
+                tb.name = "Caption"
+                parts[-1].append(tb)
+            x += w + gap
+        if it.get("build"):  # one figure (with its caption) per click
+            effect = it["build"] if isinstance(it["build"], str) else "fade"
+            for shapes in parts:
+                self.steps.append([[Effect(s.shape_id, effect) for s in shapes]])
+                for s in shapes[1:]:
+                    self.builds[s.shape_id] = "shape"
+            self._last_main = parts[0][0]
+        else:
+            flat = [s for shapes in parts for s in shapes]
+            if len(flat) > 1:
+                grp = slide.shapes.add_group_shape(flat)
+                grp.name = "Images"
+                self._animate(it, grp, "group")
+            else:
+                self._animate(it, flat[0], "pic")
+        self._caption(slide, it, spec, b, y + img_h + sub, scale)
+
+    # ---- stats: a row of key numbers -------------------------------------------------------
+    def _stats_geometry(self, it, w, scale):
+        """-> (entries, cell width, value size, label size, row height)."""
+        entries = it["stats"].get("items")
+        if not isinstance(entries, list) or not entries:
+            raise ValueError(f"stats needs a list, e.g. stats: {EXAMPLES['stats']}")
+        entries = [e if isinstance(e, dict) else {"value": e} for e in entries]
+        for e in entries:
+            self._check("stats entry", e, {"value", "label", "color"})
+            if e.get("value") is None:
+                raise ValueError("each stats entry needs a value, e.g. {value: '95%', label: accuracy}")
+        cw = (w - STAT_GAP * (len(entries) - 1)) / len(entries)
+        vs = round(float(it["stats"].get("size") or self.level_sizes[0] * 1.8) * scale, 1)
+        ls = round(self.level_sizes[0] * 0.8 * scale, 1)
+        lines = max([est_lines(str(e["label"]), cw - 0.1, ls, self.cw) for e in entries if e.get("label")] or [0])
+        return entries, cw, vs, ls, vs * 1.2 / 72 + (lines * ls * 1.2 / 72 + 0.06 if lines else 0) + 0.12
+
+    def _render_stats(self, slide, it, b, scale):
+        entries, cw, vs, ls, h = self._stats_geometry(it, b.w, scale)
+        color = it["stats"].get("color", "structure")
+        y = b.y + max(0.0, (b.h - h) / 2)
+        shapes = []
+        for i, e in enumerate(entries):
+            tb = slide.shapes.add_textbox(inch(b.x + i * (cw + STAT_GAP)), inch(y), inch(cw), inch(h))
+            tf = tb.text_frame
+            self._prep_tf(tf)
+            self._fill_text(tf, str(e["value"]), size=vs, style={"color": e.get("color", color), "bold": True},
+                            align="center")
+            if e.get("label"):
+                p = tf.add_paragraph()
+                set_bullet(p, "none")
+                p.alignment = PP_ALIGN.CENTER
+                self._add_runs(p, str(e["label"]), {"size": ls, "color": "muted"})
+            tb.name = f"Stat: {strip_markup(str(e['value']))[:40]}"
+            shapes.append(tb)
+        if it.get("build"):  # one number per click
+            effect = it["build"] if isinstance(it["build"], str) else "fade"
+            for s in shapes:
+                self.steps.append([[Effect(s.shape_id, effect)]])
+                self.builds[s.shape_id] = "shape"
+            self._last_main = shapes[0]
+        elif len(shapes) > 1:
+            grp = slide.shapes.add_group_shape(shapes)
+            grp.name = "Stats"
+            self._animate(it, grp, "group")
+        else:
+            self._animate(it, shapes[0], "sp_text")
+
+    # ---- references and closing slides -----------------------------------------------------
+    def _references_slides(self, spec):
+        """Numbered references with hanging indents, continued on as many slides as needed."""
+        entries = spec.get("items", spec.get("references"))
+        if not isinstance(entries, list) or not entries:
+            raise ValueError("references needs items: a list with one entry per reference")
+        size = float(spec.get("size") or max(MIN_PT, round(self.level_sizes[0] * 0.62)))
+        n, rows = int(spec.get("start", 1)), []
+        for e in entries:
+            text = str(e).strip()
+            m = re.match(r"\[([^\]]{1,12})\]\s*", text)
+            if m:  # the entry brings its own label, e.g. "[12] ..."; numbering continues after it
+                label, text = f"[{m.group(1)}]", text[m.end():]
+                n = int(m.group(1)) + 1 if m.group(1).isdigit() else n
+            elif spec.get("numbered", True):
+                label, n = f"[{n}]", n + 1
+            else:
+                label = ""
+            rows.append((label, text))
+        hang = max(len(lb) for lb, _ in rows) * size * 0.55 / 72 + 0.15 if any(lb for lb, _ in rows) else 0.3
+        box = self.area
+        heights = [est_lines(text, box.w - hang - 0.05, size, self.cw) * size * 1.2 / 72 + size * 0.5 / 72
+                   for _, text in rows]
+
+        def paginate(cap):
+            pages, used = [[]], 0.0
+            for row, h in zip(rows, heights):
+                if pages[-1] and used + h > cap:
+                    pages.append([])
+                    used = 0.0
+                pages[-1].append(row)
+                used += h
+            return pages
+
+        pages = paginate(box.h)
+        if len(pages) > 1:  # spread the entries evenly instead of leaving a short last slide
+            even = paginate(max(sum(heights) / len(pages) * 1.05, max(heights)))
+            pages = even if len(even) == len(pages) else pages
+        title, slides = str(spec.get("title", "References")), []
+        for k, page in enumerate(pages, 1):
+            slide = self.prs.slides.add_slide(self.layouts["title_only"])
+            self._set_title(slide, title if len(pages) == 1 else f"{title} ({k}/{len(pages)})")
+            title_ph = slide.shapes.title
+            self._remove_empty_placeholders(slide, {title_ph.placeholder_format.idx} if title_ph else set())
+            tb = slide.shapes.add_textbox(inch(box.x), inch(box.y), inch(box.w), inch(box.h))
+            tf = tb.text_frame
+            tf.word_wrap, tf.auto_size, tf.vertical_anchor = True, MSO_AUTO_SIZE.NONE, MSO_ANCHOR.TOP
+            tf.margin_left = tf.margin_right = inch(0.02)
+            tf.margin_top = tf.margin_bottom = inch(0.04)
+            for i, (label, text) in enumerate(page):
+                p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+                set_bullet(p, "none")
+                pPr = p._p.get_or_add_pPr()
+                pPr.set("marL", str(int(hang * EMU)))
+                pPr.set("indent", str(-int(hang * EMU)))
+                tabs = etree.Element(qn("a:tabLst"))
+                tab = etree.SubElement(tabs, qn("a:tab"))
+                tab.set("pos", str(int(hang * EMU)))
+                tab.set("algn", "l")
+                pPr_insert(pPr, tabs)
+                if i:
+                    p.space_before = Pt(round(size * 0.5, 1))
+                if label:
+                    self._run(p, label + "\t", {"size": size})
+                self._add_runs(p, text, {"size": size})
+            tb.name = "References"
+            slides.append(slide)
+        return slides
+
+    def _closing_slide(self, spec):
+        """Thank-you slide on the Blank layout: big title, muted subtitle, optional contact line(s)."""
+        slide = self.prs.slides.add_slide(self.layouts["plain"])
+        self._remove_empty_placeholders(slide, keep=set())
+        lv = self.level_sizes[0]
+        items = [("text", {"text": str(spec.get("title", "Thank you!")), "size": round(lv * 2), "align": "center",
+                           "color": "structure", "_font": "+mj-lt"})]  # the theme's heading font
+        if spec.get("subtitle", "Questions?"):
+            items.append(("text", {"text": str(spec.get("subtitle", "Questions?")), "size": round(lv * 1.1),
+                                   "align": "center", "color": "muted"}))
+        if spec.get("text"):
+            items.append(("text", {"text": str(spec["text"]), "size": round(lv * 0.75), "align": "center"}))
+        m = 0.6
+        self._render_items(slide, items, Box(m, m, self.W - 2 * m, self.H - 2 * m), "center")
+        return slide
+
     # ---- flows: flowcharts, workflows, step rows (layout in flows.py) ---------------------
     def _flow(self, kind, it):
         """(layout in em, settings) of a flow or steps item, computed once per item."""
-        import flows
-
         hit = self._flow_cache.get(id(it))
         if hit and hit[0] is it:
             return hit[1], hit[2]
-        v = it[kind]
-        if kind == "flow":
-            if not isinstance(v, dict):
-                raise ValueError("flow needs settings, e.g. {nodes: [...], edges: ['a -> b']}")
-            spec = v
-        elif isinstance(v, dict):
-            spec = v
-        else:  # steps: [A, B, C] with its settings next to it, like bullets
-            spec = {**{k: x for k, x in it.items() if k not in ("steps", "animate", "build", "name")}, "items": v}
+        spec = it[kind]  # a mapping: _prepare_item merged a steps list and its settings into one
         lay = flows.layout(kind, spec, strip_markup)
         self._flow_cache[id(it)] = (it, lay, spec)
         return lay, spec
@@ -1535,8 +2051,6 @@ class DeckBuilder:
 
     def _render_flow(self, slide, kind, it, b, scale):
         """Native shapes and connectors glued to their connection sites: drag a shape, its arrows follow."""
-        import flows
-
         lay, spec = self._flow(kind, it)
         f = self._flow_font(spec, scale)
         cap = 0.4 if spec.get("caption") else 0
@@ -1544,9 +2058,8 @@ class DeckBuilder:
         k = min(1.0, b.w * float(spec.get("width", 1.0)) / (lay.w * f / 72), avail_h / (lay.h * f / 72))
         fs = f * k
         if fs < FLOW_MIN_PT - 0.5:
-            title = slide.shapes.title.text_frame.text if slide.shapes.title else "(untitled)"
-            warn(f"{kind} diagram on slide '{title}' is drawn with {fs:.0f} pt text - give it more room, "
-                 f"split it, or change its direction")
+            self.warn(f"{kind} diagram drawn with {fs:.0f} pt text - give it more room (a column of its own), "
+                      f"split it, or change its direction")
         em = fs / 72  # inches per em
         x0 = b.x + (b.w - lay.w * em) / 2
         y0 = b.y + (avail_h - lay.h * em) / 2
@@ -1707,7 +2220,7 @@ class DeckBuilder:
     def _caption(self, slide, it, spec, b, top, scale):
         if not spec.get("caption"):
             return
-        tb = slide.shapes.add_textbox(inch(b.x), inch(top + 0.05), inch(b.w), inch(0.4))
+        tb = slide.shapes.add_textbox(inch(b.x), inch(top + 0.04), inch(b.w), inch(0.36))
         self._prep_tf(tb.text_frame)
         self._fill_text(tb.text_frame, str(spec["caption"]), size=round(self.level_sizes[0] * 0.66 * scale, 1),
                         style={"color": "muted", "italic": True}, align="center")
@@ -1749,6 +2262,27 @@ class DeckBuilder:
             self.steps.append([[e]])
         self.builds[spid] = {"sp_text": "shape", "graphic": "graphic"}.get(kind, "none")
 
+    def _animate_new(self, slide, start, it):
+        """One entrance step for every not yet animated shape added since index `start` (a column or a row
+        of columns): the first shape follows `animate`, the rest appear with it."""
+        done = {e.spid for step in self.steps for group in step for e in group}
+        shapes = [s for s in list(slide.shapes)[start:] if s.shape_id not in done]
+        if not shapes:
+            return
+        effect, on, dur = self._anim_spec(it)
+        for k, s in enumerate(shapes):
+            e = Effect(s.shape_id, effect, None, dur, on if k == 0 else "with")
+            if (k or on == "with") and self.steps:
+                self.steps[-1][-1].append(e)
+            elif on == "after" and self.steps:
+                self.steps[-1].append([e])
+            else:
+                self.steps.append([[e]])
+            if s.has_chart:
+                self.builds[s.shape_id] = "graphic"
+            elif s.has_text_frame:
+                self.builds[s.shape_id] = "shape"
+
     def _apply_timing(self, slide, transition):
         sld = slide._element
         for tag in (qn("p:transition"), qn("p:timing"), f"{{{NS_MC}}}AlternateContent"):
@@ -1758,7 +2292,7 @@ class DeckBuilder:
         if anchor is None:
             anchor = sld.find(qn("p:cSld"))
         idx = list(sld).index(anchor) + 1
-        tx = transition_xml(transition)
+        tx = transition_xml(transition, self.warn)
         if tx:
             sld.insert(idx, parse_xml(tx))
             idx += 1
@@ -1769,7 +2303,7 @@ class DeckBuilder:
     def _finalize_math(self, slides):
         if not self.math_jobs:
             return
-        omml = MathEngine().convert(self.math_jobs)
+        omml = MathEngine().convert(self.math_jobs, self.warn)
         mark_re = re.compile(re.escape(MARK) + r"(\d+)" + re.escape(MARK))
         for slide in slides:
             tree = slide.shapes._spTree
@@ -1841,29 +2375,122 @@ class DeckBuilder:
 # --------------------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------------------
-def build_deck(content_path: str, output: str | None = None, template: str | None = None,
-               keep_template_slides: bool = False) -> str:
-    with open(content_path, encoding="utf-8") as fh:
-        content = yaml.safe_load(fh) or {}
+def load_content(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            content = yaml.safe_load(fh) or {}
+    except FileNotFoundError:
+        raise SystemExit(f"error: file not found: {path}") from None
+    except yaml.YAMLError as exc:
+        raise SystemExit(f"error: {path} is not valid YAML\n{exc}\nhint: quote text that contains ': ' or ' #' "
+                         f"or starts with * - [ {{ & ! % @ ` (see YAML_GUIDE.md, YAML gotchas)") from None
+    if not isinstance(content, dict):
+        raise SystemExit("error: the YAML needs `meta:` (a mapping) and `slides:` (a list) at the top level")
+    return content
+
+
+def _build(content_path, output=None, template=None, keep_template_slides=False, check=False):
+    """-> (builder, presentation, output path or None when only checking)."""
+    content = load_content(content_path)
     base = os.path.dirname(os.path.abspath(content_path))
-    builder = DeckBuilder(content, template, base, keep_template_slides=keep_template_slides)
+    builder = DeckBuilder(content, template, base, keep_template_slides=keep_template_slides, check_only=check)
     prs = builder.build()
-    out = output or (content.get("meta", {}) or {}).get("output") or os.path.splitext(content_path)[0] + ".pptx"
-    if not os.path.isabs(out) and output is None and (content.get("meta", {}) or {}).get("output"):
+    if check:
+        return builder, prs, None
+    out = output or (content.get("meta") or {}).get("output") or os.path.splitext(content_path)[0] + ".pptx"
+    if not os.path.isabs(out) and output is None and (content.get("meta") or {}).get("output"):
         out = os.path.join(base, out)
-    prs.save(out)
-    return out
+    try:
+        prs.save(out)
+    except PermissionError:
+        raise SystemExit(f"error: cannot write {out} - is it open in PowerPoint? Close it or use -o other.pptx") from None
+    return builder, prs, out
+
+
+def build_deck(content_path: str, output: str | None = None, template: str | None = None,
+               keep_template_slides: bool = False, check: bool = False) -> str | None:
+    """Build a deck; returns the output path (None with check=True). Warnings are printed to stderr."""
+    return _build(content_path, output, template, keep_template_slides, check)[2]
+
+
+def inspect_template(template: str | None = None, base_dir: str = ".", layouts: dict | None = None) -> str:
+    """What a template gives ppt_templated: layouts, content area, fonts, text sizes, colours, tokens."""
+    b = DeckBuilder({"meta": {"layouts": layouts or {}}}, template, base_dir)
+    colors, fonts = b._theme()
+    roles = {"dk1": "text", "lt1": "background", "accent1": "structure", "accent2": "alert", "accent3": "example"}
+    a, lv = b.area, b.level_sizes[0]
+    texts = [sh.text_frame.text for c in [b.prs.slide_master, *b.prs.slide_layouts]
+             for sh in iter_shapes_deep(c.shapes) if sh.has_text_frame and not sh.is_placeholder]
+    tokens = sorted(set(re.findall(r"\{(\w+)\}", " ".join(texts))))
+    cols = [f"{k} #{v}" + (f" ({roles[k]})" if k in roles else "") for k, v in colors.items()]
+    return "\n".join([
+        f"template      {b.template_path}  ({b.W:.2f} x {b.H:.2f} in)",
+        "layouts       " + ", ".join(f"{k} = {lay.name!r}" for k, lay in b.layouts.items()),
+        "title slide   placeholders: " + ", ".join(ph.name for ph in b.layouts["title"].placeholders),
+        f"content area  x {a.x:.2f}  y {a.y:.2f}  w {a.w:.2f}  h {a.h:.2f} in (every frame's content goes here)",
+        f"fonts         headings {fonts['major']}, body {fonts['minor']}",
+        f"text sizes    frame title {b.title_size:g} pt; body levels "
+        + " / ".join(f"{s:g}" for s in b.level_sizes) + " pt",
+        f"item sizes    blocks {lv * .9:.0f}, tables {lv * .78:.0f}, flows {lv * .72:.0f}, code {lv * .7:.0f}, "
+        f"captions / charts / plots {lv * .66:.0f} pt",
+        "colours       " + "\n              ".join("  ".join(cols[i:i + 4]) for i in range(0, len(cols), 4)),
+        "footline      tokens: " + (" ".join("{" + t + "}" for t in tokens) or "none"),
+    ])
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Build an editable Beamer-style .pptx from a YAML content file.")
-    ap.add_argument("content", help="YAML content file")
-    ap.add_argument("-o", "--output", help="output .pptx (default: next to the content file)")
+    ap = argparse.ArgumentParser(
+        description="Build an editable Beamer-style .pptx from a YAML content file (reference: YAML_GUIDE.md).",
+        epilog="examples:\n  python ppt_templated.py talk.yaml --preview\n  python ppt_templated.py talk.yaml --check"
+               "\n  python ppt_templated.py --inspect templates/beamer_paper.pptx",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("content", nargs="?", help="YAML content file")
+    ap.add_argument("-o", "--output", help="output .pptx (default: meta.output, else next to the YAML)")
     ap.add_argument("-t", "--template", help="template .pptx/.potx (default: meta.template or templates/beamer_oxford.pptx)")
+    ap.add_argument("--check", action="store_true", help="validate and lay out only; write nothing")
+    ap.add_argument("--preview", nargs="?", const="", metavar="DIR",
+                    help="also render slide PNGs and 6-slide contact sheets (default: .preview/<deck>/ beside the deck)")
+    ap.add_argument("--strict", action="store_true", help="exit with status 1 if there were warnings")
+    ap.add_argument("--inspect", nargs="?", const="", metavar="TEMPLATE",
+                    help="describe a template (default: the YAML's or the default template) and exit")
     ap.add_argument("--keep-template-slides", action="store_true", help="keep slides already in the template")
     a = ap.parse_args(argv)
-    out = build_deck(a.content, a.output, a.template, a.keep_template_slides)
-    print(f"wrote {out}")
+    for opt in ("preview", "inspect"):  # `--preview talk.yaml`: the YAML is the content, not the option's value
+        v = getattr(a, opt)
+        if not a.content and v and v.lower().endswith((".yaml", ".yml", ".json")):
+            a.content = v
+            setattr(a, opt, "")
+    for stream in (sys.stdout, sys.stderr):  # slide titles and warnings may hold any character
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    if a.inspect is not None:
+        meta = (load_content(a.content).get("meta") or {}) if a.content else {}
+        base = os.path.dirname(os.path.abspath(a.content)) if a.content else os.getcwd()
+        print(inspect_template(a.inspect or a.template or meta.get("template"), base, meta.get("layouts")))
+        return
+    if not a.content:
+        ap.error("give a YAML content file (or --inspect TEMPLATE)")
+    builder, prs, out = _build(a.content, a.output, a.template, a.keep_template_slides, a.check)
+    if a.preview is not None and out:
+        import preview
+        try:  # PowerPoint also measures the rendered layout: real overlaps become warnings too
+            slides, sheets, engine, problems = preview.preview(out, a.preview or None,
+                                                               bottom=builder.area.y + builder.area.h)
+            for p in problems:
+                builder.warn(f"{p} (measured)")
+        except RuntimeError as exc:
+            slides = None
+            warn(f"no preview - {exc}")
+    n = len(builder.warnings)
+    summary = f"{len(prs.slides)} slides, {n} warning{'' if n == 1 else 's'}"
+    print(f"checked {a.content} ({summary})" if a.check else f"wrote {out} ({summary})")
+    if a.preview is not None and out and slides:
+        print(f"preview ({engine}): {len(slides)} slide images in {os.path.dirname(slides[0])}")
+        print("  contact sheets: " + "  ".join(sheets))
+    if a.strict and n:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

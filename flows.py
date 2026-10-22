@@ -9,7 +9,7 @@ ppt_templated draws the result as native shapes plus connectors glued to them, s
 in PowerPoint keeps its arrows attached.
 
 All lengths are in em (multiples of the node font size), so a diagram scales as one piece.
-All settings are documented in YAML_GUIDE.md (section 6.12 / 6.13). When you add or change a
+All settings are documented in YAML_GUIDE.md (`flow`, `steps`). When you add or change a
 setting, shape or rule here, update that guide in the same commit.
 """
 
@@ -91,6 +91,11 @@ NODE_KEYS = {"id", "text", "shape", "color", "style", "text_color", "bold", "ste
 EDGE_KEYS = {"from", "to", "label", "style", "color", "arrow", "exit", "enter", "width"}
 GROUP_KEYS = {"label", "nodes", "color", "fill"}
 STEP_KEYS = {"text", "color", "style", "text_color", "bold", "shape"}
+# settings of a whole `flow:` / `steps:` item (the last seven are read by ppt_templated when drawing)
+FLOW_KEYS = {"nodes", "edges", "groups", "direction", "shape", "color", "style", "uniform", "wrap", "gap",
+             "size", "line_color", "line_width", "width", "height", "caption", "alt"}
+STEPS_KEYS = {"items", "highlight", "shape", "color", "style", "wrap", "direction", "gap", "uniform",
+              "size", "line_color", "line_width", "width", "height", "caption", "alt"}
 EDGE_RE = re.compile(r"\s*(<->|-->|->|--)\s*")
 EDGE_OPS = {"->": ("end", "solid"), "-->": ("end", "dashed"), "<->": ("both", "solid"), "--": ("none", "solid")}
 

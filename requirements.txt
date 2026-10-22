@@ -7,3 +7,7 @@ matplotlib>=3.7
 numpy>=1.23
 # optional: native, editable equations
 pypandoc_binary>=1.13
+# optional: PDF figures (`image: fig.pdf`) and LibreOffice previews
+# pymupdf>=1.23
+# optional: PNG fallbacks of SVG figures when neither Chrome nor Edge is installed
+# cairosvg>=2.7

@@ -3,9 +3,9 @@ plots.py - academic-style figures for ppt-templated: bar, box, line, scatter and
 
 ppt-templated calls render() for every `plot:` item. The figure is drawn at the exact size it gets on
 the slide, in the template's body font and theme colours, and embedded straight into the deck as
-a 300 dpi PNG (nothing is written to disk). Use `chart:` instead when you need a native,
-editable PowerPoint chart; use `plot:` for box plots, confusion matrices, error bands, trend
-lines and print-quality styling.
+an SVG (vector, drawn by PowerPoint 2019+) with a 300 dpi PNG fallback (nothing is written to disk).
+Use `chart:` instead when you need a native, editable PowerPoint chart; use `plot:` for box plots,
+confusion matrices, error bands, trend lines and print-quality styling.
 
 Colour specs, accepted by every colour setting:
     accent1 ... accent6, tx1, bg1, tx2, bg2    theme slots of the template
@@ -14,7 +14,7 @@ Colour specs, accepted by every colour setting:
     "#1F3A5F", black, tab:blue                 anything matplotlib understands
 Settings that colour several things (series, boxes, ...) take one colour or a list (cycled).
 
-All plot settings are documented in YAML_GUIDE.md (section 7). When you add or change a setting
+All plot settings are documented in YAML_GUIDE.md (`plot`). When you add or change a setting
 or plot type here, update that guide in the same commit.
 """
 
@@ -31,6 +31,17 @@ from matplotlib.figure import Figure
 from matplotlib.ticker import StrMethodFormatter
 
 PLOT_TYPES = ("bar", "box", "line", "scatter", "confusion")
+COMMON_KEYS = {"type", "title", "xlabel", "ylabel", "legend", "grid", "xlim", "ylim", "xscale", "yscale",
+               "xformat", "yformat", "xticks_rotation", "width", "height", "aspect", "font", "font_size", "math",
+               "caption", "alt", "dpi", "colors", "vector"}
+TYPE_KEYS = {
+    "bar": {"categories", "series", "values", "y", "errors", "value_format", "horizontal", "stacked", "bar_width",
+            "hatch"},
+    "box": {"groups", "stats", "points", "means", "notch", "whis", "fliers", "horizontal", "box_width"},
+    "line": {"x", "series", "y", "values", "errors", "band_alpha", "markers", "dashes", "line_width", "marker_size"},
+    "scatter": {"series", "values", "y", "trend", "trend_label", "markers", "marker_size", "alpha"},
+    "confusion": {"labels", "matrix", "normalize", "values", "value_format", "colorbar", "square"},
+}
 HATCHES = ["", "//", "..", "xx", "\\\\", "oo", "++", "--"]
 MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*"]
 DASHES = ["-", "--", "-.", ":"]
@@ -120,9 +131,14 @@ def _rc(font: str, size: float, math: str) -> dict:
 # ------------------------------------------------------------------------------------------
 # entry point
 # ------------------------------------------------------------------------------------------
+def keys(kind=None) -> set:
+    """Settings a `plot:` of this type accepts (all plot settings for an unknown type)."""
+    return COMMON_KEYS | TYPE_KEYS.get(kind, set().union(*TYPE_KEYS.values()))
+
+
 def render(spec: dict, theme_colors: dict, theme_font: str | None, width_in: float, height_in: float,
-           font_size: float) -> bytes:
-    """Draw one `plot:` item at width_in x height_in inches and return PNG bytes."""
+           font_size: float, vector: bool = False):
+    """Draw one `plot:` item at width_in x height_in inches. Returns PNG bytes, or (PNG, SVG) with vector."""
     spec = dict(spec)  # drawing fills in defaults (e.g. confusion axis labels); keep the content untouched
     kind = spec.get("type")
     if kind not in PLOT_TYPES:
@@ -139,7 +155,13 @@ def render(spec: dict, theme_colors: dict, theme_font: str | None, width_in: flo
         _style(fig, ax, spec, c, P, kind, n_labeled)
         buf = io.BytesIO()
         fig.savefig(buf, format="png", dpi=int(spec.get("dpi", 300)), metadata={"Software": None})
-    return buf.getvalue()
+        if not vector:
+            return buf.getvalue()
+        # text as outlines: PowerPoint draws exactly what matplotlib drew, whatever fonts are installed
+        with matplotlib.rc_context({"svg.fonttype": "path", "svg.hashsalt": "ppt-templated"}):
+            svg = io.BytesIO()
+            fig.savefig(svg, format="svg", metadata={"Date": None})
+    return buf.getvalue(), svg.getvalue()
 
 
 def _need(s: dict, key: str, kind: str):

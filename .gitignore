@@ -5,3 +5,5 @@ __pycache__/
 paper-*/
 project_*/
 book_*/
+.preview/
+.ppt-cache/

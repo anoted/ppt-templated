@@ -9,7 +9,8 @@ meta:
   author: "A. Researcher"
   institute: "Department of Presentation Science"
   date: today                                # or any text, e.g. "March 3, 2026"
-  template: ../templates/beamer_blue.pptx    # try beamer_charcoal.pptx or beamer_crimson.pptx
+  template: ../templates/beamer_blue.pptx    # try beamer_modern.pptx or beamer_crimson.pptx
+  output: example_deck.pptx                  # relative to this file
   transition: fade                           # default slide transition (optional)
   # section_style: outline                   # uncomment: Beamer-style outline at every section
 
@@ -145,6 +146,25 @@ slides:
           alt: Contour plot of a two-peak surface
         animate: fade
 
+  - title: SVG figures and figure rows
+    content:
+      - images:                                  # one height for all; SVG/PDF are converted automatically
+          - {path: assets/contour.png, caption: "(a) PNG from any tool"}
+          - {path: assets/attention.svg, caption: "(b) SVG: stays sharp at any size"}
+        caption: "Figures in a row share one height and keep their aspect ratio."
+        build: true                              # one figure per click
+
+  - title: Key numbers
+    content:
+      - stats:
+          - {value: "+4.2", label: "accuracy points over the baseline"}
+          - {value: "3×", label: "faster to rebuild than to edit by hand"}
+          - {value: "0", label: "formatting steps by hand", color: alert}
+        build: true
+      - text: "One number per click, like the bullets of a Beamer `\\pause`."
+        align: center
+        color: muted
+
   - title: Code listings
     content:
       - code: |
@@ -237,12 +257,11 @@ slides:
           text: "Shapes with the same name (\"!!focus\") are matched by Morph, so PowerPoint animates the move. Older PowerPoint versions fall back to a fade."
         name: focus
 
-  - layout: plain
-    content:
-      - text: "Thank you!"
-        size: 44
-        align: center
-        color: structure
-      - text: "Questions?"
-        align: center
-        color: muted
+  - layout: references          # numbered, hanging indent; long lists continue on more slides
+    items:
+      - 'T. Tantau, J. Wright and V. Miletić, "The beamer class," user guide, CTAN.'
+      - 'J. D. Hunter, "Matplotlib: A 2D graphics environment," *Computing in Science & Engineering*, vol. 9, no. 3, pp. 90-95, 2007.'
+      - 'J. MacFarlane, "Pandoc: a universal document converter," [pandoc.org](https://pandoc.org).'
+
+  - layout: closing             # "Thank you!" and "Questions?" unless you set title / subtitle
+    text: "Made with ppt-templated"

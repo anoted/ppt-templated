@@ -2,8 +2,10 @@
 """
 build_template.py - generate Beamer-inspired PowerPoint templates.
 
-    python build_template.py                 # builds all themes into templates/
-    python build_template.py --theme blue    # just one
+    python build_template.py                         # builds all themes into templates/
+    python build_template.py --theme blue            # just one
+    python build_template.py --spec my_theme.yaml    # a theme from a file (same keys as THEMES)
+    python build_template.py --list                  # the built-in themes
 
 Each template is a normal .pptx whose slide master and layouts carry all the formatting:
   * theme colours  (accent1 = structure, accent2 = alert, accent3 = example, accent4-6 = charts)
@@ -14,14 +16,17 @@ Each template is a normal .pptx whose slide master and layouts carry all the for
     such as {author} that ppt_templated.py fills in.
 
 You can also open the result in PowerPoint (View > Slide Master) and restyle it by hand -
-see TEMPLATE_GUIDE.md. Add your own colour theme by copying an entry in THEMES.
+see TEMPLATE_GUIDE.md, which lists every theme key.
 """
 
 import argparse
 import copy
+import difflib
 import os
+import re
 import sys
 
+import yaml
 from lxml import etree
 from pptx import Presentation
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
@@ -102,17 +107,29 @@ THEMES = {
         "footline": "text",
         "cover": "plain", "cover_text": "accent1",
     },
+    "modern": {  # clean sans-serif: white slides, teal accent rule under the title, left-aligned covers
+        "label": "Beamer Modern (clean sans-serif)",
+        "colors": dict(dk1="1F2933", lt1="FFFFFF", dk2="1B2A41", lt2="F1F4F7", accent1="0B7189",
+                       accent2="D1495B", accent3="2A7F62", accent4="E9A03B", accent5="5C6BC0",
+                       accent6="8A94A6", hlink="0B7189", folHlink="5C6BC0"),
+        "fonts": ("Calibri Light", "Calibri"),
+        "frame": "accent", "title_color": "tx2", "rule": "accent1",
+        "footline": "text",
+        "cover": "left", "cover_text": "tx2",
+        "bullets": [("•", 100), ("–", 100), ("•", 100)],
+    },
 }
-# Optional style keys (defaults give the Madrid look above):
-#   frame      "bar" (filled title bar) | "rule" (hairline under the title) | "plain"
-#   title_color / bar_text   frame-title colour;  bar_stripe   thin stripe under the bar
-#   rule       colour of the title hairline (frame: rule)
-#   footline   "boxes" (coloured segments, uses foot/foot_text) | "text" (grey text only)
-#   foot_rule  hairline above a text footline;  foot_stripe  stripe above a boxed footline
-#   cover      "box" (filled title box) | "rules" (rules above/below the title) | "plain"
-#   cover_text title colour on Title/Section slides;  radius  title-box corner (0 = square)
-#   bullets    [(char, size %), ...] for levels 1-3 (repeated below);  bullet_color
-#   title_bold, subtitle_italic
+# Style keys (all optional; the defaults give the Madrid look of "blue"). TEMPLATE_GUIDE.md explains them.
+DEFAULTS = {"fonts": ("Calibri", "Calibri"), "bar": "accent1", "bar_text": "bg1",
+            "foot": ["accent1", "accent1", "accent1"], "foot_text": ["bg1", "bg1", "bg1"]}
+CHOICES = {"frame": ("bar", "rule", "accent", "plain"), "footline": ("boxes", "text"),
+           "cover": ("box", "rules", "left", "plain")}
+THEME_KEYS = {"label", "colors", "fonts", "bar", "bar_text", "bar_stripe", "frame", "title_color", "rule",
+              "footline", "foot", "foot_text", "foot_rule", "foot_stripe", "cover", "cover_text", "radius",
+              "bullets", "bullet_color", "title_bold", "subtitle_italic"}
+SLOTS = ("dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
+         "hlink", "folHlink")
+COLOR_REFS = {"tx1", "tx2", "bg1", "bg2", *SLOTS}
 
 # Geometry (inches) - change here to move things in every layout at once
 BAR_H = 0.95
@@ -123,6 +140,48 @@ FOOT_Y = H - FOOT_H
 COL_W = (BODY[2] - 0.4) / 2
 RULE = 0.014    # hairline (~1 pt)
 STRIPE = 0.05   # accent stripe under the bar / above the footline
+
+
+def check_theme(t: dict, name: str) -> dict:
+    """The theme with defaults filled in; exits with a clear message on an unknown key or a bad value."""
+    def fail(msg):
+        sys.exit(f"error: theme '{name}': {msg}")
+
+    def is_ref(v):  # a theme colour: "accent1" or [name, lumMod %, lumOff %]
+        return (isinstance(v, str) and v in COLOR_REFS) or (
+            isinstance(v, (list, tuple)) and len(v) == 3 and v[0] in COLOR_REFS)
+
+    for k in t:
+        if k not in THEME_KEYS:
+            hit = difflib.get_close_matches(k, THEME_KEYS, n=1)
+            fail(f"unknown key '{k}'" + (f" (did you mean '{hit[0]}'?)" if hit else "")
+                 + f"; keys: {', '.join(sorted(THEME_KEYS))}")
+    t = {**DEFAULTS, "label": f"Beamer {name.title()}", **t}
+    if t.get("frame", "bar") != "bar":  # no bar behind the title: the bar's (white) text color would vanish
+        t.setdefault("title_color", "tx1")
+    colors = {**THEMES["oxford"]["colors"], **(t.get("colors") or {})}  # missing slots: Oxford's
+    for k, v in colors.items():
+        if k not in SLOTS:
+            fail(f"unknown colour slot '{k}'; slots: {', '.join(SLOTS)}")
+        v = f"{v:06d}" if isinstance(v, int) else str(v).lstrip("#")  # YAML reads 000000 as a number
+        if not re.fullmatch(r"[0-9A-Fa-f]{6}", v):
+            fail(f"colour {k}: '{v}' is not a hex colour like 1F3A5F (quote it in YAML)")
+        colors[k] = v.upper()
+    t["colors"] = colors
+    if not isinstance(t["fonts"], (list, tuple)) or len(t["fonts"]) != 2:
+        fail("fonts must be [headings font, body font]")
+    for k, ok in CHOICES.items():
+        if t.get(k) is not None and t[k] not in ok:
+            fail(f"{k} must be one of {', '.join(ok)}, got {t[k]!r}")
+    for k in ("bar", "bar_text", "bar_stripe", "title_color", "rule", "foot_rule", "foot_stripe", "cover_text",
+              "bullet_color"):
+        if t.get(k) is not None and not is_ref(t[k]):
+            fail(f"{k}: {t[k]!r} is not a theme colour (accent1-6, tx1, tx2, bg1, bg2, "
+                 f"or [name, lumMod %, lumOff %])")
+    for k in ("foot", "foot_text"):
+        if len(t[k]) != 3 or not all(is_ref(v) for v in t[k]):
+            fail(f"{k} needs three theme colours: author, title and date segments")
+    return t
 
 
 def e(v):
@@ -216,8 +275,8 @@ def lvl(n, size, color="tx1", algn=None, extra="", attrs="", rattrs=""):
 
 
 # ------------------------------------------------------------------------------------------
-def build(theme_key, out_path):
-    t = THEMES[theme_key]
+def build(t, out_path):
+    """Write the template for theme dict t (as returned by check_theme) to out_path."""
     prs = Presentation()  # python-pptx's blank default template: 1 master, 11 layouts
     prs.slide_width, prs.slide_height = e(W), e(H)
 
@@ -253,6 +312,9 @@ def build(theme_key, out_path):
             deco += shape(16, "Frame Title Stripe", (0, BAR_H, W, STRIPE), fill=t["bar_stripe"])
     elif frame == "rule":
         deco = shape(10, "Frame Title Rule", (BODY[0], BAR_H - 0.03, BODY[2], RULE), fill=t.get("rule", "tx1"))
+    elif frame == "accent":  # light hairline under the title with a short accent bar on its left end
+        deco = (shape(10, "Frame Title Rule", (BODY[0], BAR_H - 0.03, BODY[2], RULE), fill=("bg1", 85, 0))
+                + shape(16, "Frame Title Accent", (BODY[0], BAR_H - 0.07, 1.2, 0.08), fill=t.get("rule", "accent1")))
     master_tree = tree(deco + footline(t, 11) + title_ph + body_ph, "")
     mel = master._element
     mel.replace(mel.find(qn("p:cSld")), parse_xml(master_tree))
@@ -292,42 +354,53 @@ def build(theme_key, out_path):
             prs.slide_layouts.remove(lay)
 
     no_bullet = '<a:buNone/>'
-    tbox_w = 9.8
-    tbox_x = (W - tbox_w) / 2
     radius = f'<a:gd name="adj" fmla="val {t.get("radius", 12000)}"/>'
     cover = t.get("cover", "box")
     cover_text = t.get("cover_text", "bg1" if cover == "box" else "accent1")
     box = dict(geom=("roundRect", radius), fill="accent1") if cover == "box" else {}
     sub_attrs = ' i="1"' if t.get("subtitle_italic") else ""
+    left = cover == "left"
+    al, ins, no_bu = ("l" if left else "ctr"), (0 if left else 0.3), (no_bullet, ' marL="0" indent="0"')
+    if left:  # flush left: the title sits on a short accent bar, whatever its number of lines
+        tx, tw, sx, sw = 0.9, W - 1.8, 0.9, W - 1.8
+        T = dict(title=(tx, 1.4, tw, 1.6), size=4000, anchor="b", sub=3.32, author=4.1, inst=4.6, date=5.05)
+        S = dict(title=(sx, 2.2, sw, 1.45), size=3600, anchor="b", sub=3.97)
+    else:
+        tx, tw, sx, sw = (W - 9.8) / 2, 9.8, 2.9, W - 5.8
+        T = dict(title=(tx, 1.45, tw, 1.45), size=3600, anchor="ctr", sub=3.0, author=3.95, inst=4.5, date=5.2)
+        S = dict(title=(sx, 2.85, sw, 1.15), size=3200, anchor="ctr", sub=4.15)
+    pad = f'lIns="{e(ins)}" ' if left else ""
 
     def rules(top, bottom, x, w):
-        """booktabs-style: heavier rule above the title, lighter rule below it."""
+        """booktabs-style: heavier rule above the title, lighter rule below it; or the accent bar under it."""
+        if left:
+            return shape(30, "Title Accent", (x, bottom + 0.12, 1.3, 0.09), fill=t.get("rule", "accent1"))
         if cover != "rules":
             return ""
         return (shape(30, "Title Rule Top", (x, top, w, RULE * 2), fill=cover_text)
                 + shape(31, "Title Rule Bottom", (x, bottom, w, RULE), fill=cover_text))
 
     title_slide = (
-        ph(2, "Title 1", 'type="ctrTitle"', (tbox_x, 1.45, tbox_w, 1.45), **box,
-           prompt="Presentation Title", lst=lvl(1, 3600, cover_text, "ctr"),
-           body_pr=f'lIns="{e(0.3)}" rIns="{e(0.3)}" anchor="ctr"', autofit=True)
-        + rules(1.35, 2.95, tbox_x, tbox_w)
-        + ph(3, "Subtitle 2", 'type="subTitle" idx="1"', (tbox_x, 3.0, tbox_w, 0.6), prompt="Subtitle",
-             lst=lvl(1, 2200, "accent1", "ctr", no_bullet, ' marL="0" indent="0"', sub_attrs), body_pr='anchor="t"')
-        + ph(4, "Author", 'type="body" sz="quarter" idx="13"', (tbox_x, 3.95, tbox_w, 0.5), prompt="Author Name",
-             lst=lvl(1, 2200, "tx1", "ctr", no_bullet, ' marL="0" indent="0"'), body_pr='anchor="ctr"')
-        + ph(5, "Institute", 'type="body" sz="quarter" idx="14"', (tbox_x, 4.5, tbox_w, 0.5), prompt="Institute",
-             lst=lvl(1, 1800, ("tx1", 65, 35), "ctr", no_bullet, ' marL="0" indent="0"'), body_pr='anchor="ctr"')
-        + ph(6, "Date", 'type="body" sz="quarter" idx="15"', (tbox_x, 5.2, tbox_w, 0.45), prompt="Date",
-             lst=lvl(1, 1800, "tx1", "ctr", no_bullet, ' marL="0" indent="0"'), body_pr='anchor="ctr"')
+        ph(2, "Title 1", 'type="ctrTitle"', T["title"], **box,
+           prompt="Presentation Title", lst=lvl(1, T["size"], cover_text, al),
+           body_pr=f'lIns="{e(ins)}" rIns="{e(ins)}" anchor="{T["anchor"]}"', autofit=True)
+        + rules(1.35, T["title"][1] + T["title"][3] if left else 2.95, tx, tw)
+        + ph(3, "Subtitle 2", 'type="subTitle" idx="1"', (tx, T["sub"], tw, 0.6), prompt="Subtitle",
+             lst=lvl(1, 2200, "accent1", al, *no_bu, sub_attrs), body_pr=f'{pad}anchor="t"')
+        + ph(4, "Author", 'type="body" sz="quarter" idx="13"', (tx, T["author"], tw, 0.5), prompt="Author Name",
+             lst=lvl(1, 2200, "tx1", al, *no_bu), body_pr=f'{pad}anchor="ctr"')
+        + ph(5, "Institute", 'type="body" sz="quarter" idx="14"', (tx, T["inst"], tw, 0.5), prompt="Institute",
+             lst=lvl(1, 1800, ("tx1", 65, 35), al, *no_bu), body_pr=f'{pad}anchor="ctr"')
+        + ph(6, "Date", 'type="body" sz="quarter" idx="15"', (tx, T["date"], tw, 0.45), prompt="Date",
+             lst=lvl(1, 1800, ("tx1", 65, 35) if left else "tx1", al, *no_bu), body_pr=f'{pad}anchor="ctr"')
         + footline(t, 20))
     section = (
-        ph(2, "Title 1", 'type="title"', (2.9, 2.85, W - 5.8, 1.15), **box,
-           prompt="Section Title", lst=lvl(1, 3200, cover_text, "ctr"),
-           body_pr=f'lIns="{e(0.3)}" rIns="{e(0.3)}" anchor="ctr"', autofit=True)
-        + rules(2.75, 4.04, 2.9, W - 5.8)
-        + ph(3, "Section Subtitle", 'type="body" idx="1"', (2.9, 4.15, W - 5.8, 0.6), prompt="Optional subtitle",
-             lst=lvl(1, 2000, "accent1", "ctr", no_bullet, ' marL="0" indent="0"', sub_attrs), body_pr='anchor="t"')
+        ph(2, "Title 1", 'type="title"', S["title"], **box,
+           prompt="Section Title", lst=lvl(1, S["size"], cover_text, al),
+           body_pr=f'lIns="{e(ins)}" rIns="{e(ins)}" anchor="{S["anchor"]}"', autofit=True)
+        + rules(2.75, S["title"][1] + S["title"][3] if left else 4.04, sx, sw)
+        + ph(3, "Section Subtitle", 'type="body" idx="1"', (sx, S["sub"], sw, 0.6), prompt="Optional subtitle",
+             lst=lvl(1, 2000, "accent1", al, *no_bu, sub_attrs), body_pr=f'{pad}anchor="t"')
         + footline(t, 20))
     frame_title = ph(2, "Title 1", 'type="title"', TITLE, prompt="Frame Title")
     content = frame_title + ph(3, "Content Placeholder 2", 'idx="1"', BODY, levels=3, body_pr='anchor="ctr"')
@@ -381,16 +454,33 @@ DEMO = {
 }
 
 
+def load_spec(path):
+    """(name, theme) from a YAML/JSON theme file with the THEMES keys plus an optional `name`."""
+    with open(path, encoding="utf-8") as fh:
+        spec = yaml.safe_load(fh)
+    if not isinstance(spec, dict):
+        sys.exit(f"error: {path} must be a mapping of theme keys (see TEMPLATE_GUIDE.md)")
+    return str(spec.pop("name", os.path.splitext(os.path.basename(path))[0])), spec
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--theme", choices=list(THEMES), help="build only this theme")
+    ap.add_argument("--theme", choices=list(THEMES), help="build only this built-in theme")
+    ap.add_argument("--spec", metavar="FILE", help="build the theme described in a YAML/JSON file")
+    ap.add_argument("-o", "--output", help="output path for --spec / --theme (default: <outdir>/beamer_<name>.pptx)")
     ap.add_argument("--outdir", default=os.path.join(HERE, "templates"))
+    ap.add_argument("--list", action="store_true", help="list the built-in themes and exit")
     ap.add_argument("--no-preview", action="store_true", help="don't add the layout preview slides")
     a = ap.parse_args()
+    if a.list:
+        for key, t in THEMES.items():
+            print(f"{key:<9} {t['label']}")
+        return
+    jobs = [load_spec(a.spec)] if a.spec else [(k, THEMES[k]) for k in ([a.theme] if a.theme else THEMES)]
     os.makedirs(a.outdir, exist_ok=True)
-    for key in ([a.theme] if a.theme else THEMES):
-        out = os.path.join(a.outdir, f"beamer_{key}.pptx")
-        build(key, out)
+    for name, theme in jobs:
+        out = a.output if a.output and len(jobs) == 1 else os.path.join(a.outdir, f"beamer_{name}.pptx")
+        build(check_theme(theme, name), out)
         if not a.no_preview:
             import ppt_templated  # preview slides are made by the generator itself
             b = ppt_templated.DeckBuilder(copy.deepcopy(DEMO), out, HERE, substitute_tokens=False)

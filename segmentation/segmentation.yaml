@@ -153,17 +153,18 @@ slides:
   - title: Active contours and level sets
     content:
       - columns:
-          - width: 0.42
+          - width: 0.34
             content:
               - placeholder:
                   label: Evolving contour
                   note: "snake shrinking onto an object boundary over iterations"
                   aspect: "1:1"
-                  width: 0.9
+                  width: 0.95
           - content:
               - text: "Snake energy of a curve $v(s)$:"
                 size: 17
               - math: 'E = \int_0^1 \tfrac{1}{2}\big(\alpha \lVert v^\prime(s) \rVert^2 + \beta \lVert v^{\prime\prime}(s) \rVert^2\big) + E_{\text{img}}(v(s)) \, ds'
+                size: 18
               - bullets:
                   - Internal terms keep the curve smooth
                   - Image term pulls it to edges

@@ -6,7 +6,7 @@ Write what goes on each slide in YAML, pick a template, run one command, and get
 All formatting comes from the PowerPoint template, so anyone can keep editing the result in PowerPoint.
 
 ```
-talk.yaml  +  template.pptx  ──ppt_templated.py──▶  talk.pptx
+talk.yaml  +  template.pptx  ──ppt_templated.py──▶  talk.pptx  (+ slide previews)
  (what)        (how it looks)                       (native, editable)
 ```
 
@@ -20,7 +20,7 @@ talk.yaml  +  template.pptx  ──ppt_templated.py──▶  talk.pptx
 - [Example decks](#example-decks)
 - [Documentation](#documentation)
 - [YAML at a glance](#yaml-at-a-glance)
-- [Draft-first workflow](#draft-first-workflow)
+- [Working loop](#working-loop)
 - [Good to know](#good-to-know)
 - [Project layout](#project-layout)
 - [Maintaining the docs](#maintaining-the-docs)
@@ -30,19 +30,19 @@ talk.yaml  +  template.pptx  ──ppt_templated.py──▶  talk.pptx
 ## Quick start
 
 ```bash
-pip install -r requirements.txt     # python-pptx, pyyaml, pillow, lxml, matplotlib, numpy
-pip install pypandoc_binary         # optional: native, editable equations
-
-python ppt_templated.py examples/example.yaml
+pip install -r requirements.txt     # python-pptx, pyyaml, pillow, lxml, matplotlib, numpy, pandoc
+python ppt_templated.py examples/example.yaml --preview
 ```
 
-Python 3.9+. PowerPoint is only needed to *open* the decks, not to build them.
+Python 3.9+. PowerPoint is needed only to *open* decks (and, on Windows, gives the most exact previews).
 
 ```bash
 python ppt_templated.py talk.yaml                                  # → talk.pptx (or meta.output)
-python ppt_templated.py talk.yaml -o out/talk.pptx                 # explicit output
-python ppt_templated.py talk.yaml -t templates/beamer_crimson.pptx # same content, other look
-python ppt_templated.py talk.yaml -t "Company Template.potx"       # your own template (.potx works)
+python ppt_templated.py talk.yaml --preview                        # + slide PNGs, contact sheets, layout check
+python ppt_templated.py talk.yaml --check                          # validate only, write nothing
+python ppt_templated.py talk.yaml -t templates/beamer_modern.pptx  # same content, other look
+python ppt_templated.py --inspect "Company Template.potx"          # what a template provides
+python build_template.py --spec my_theme.yaml                      # a new template from a theme file
 ```
 
 From Python: `from ppt_templated import build_deck; build_deck("talk.yaml", "talk.pptx")`.
@@ -52,167 +52,152 @@ From Python: `from ppt_templated import build_deck; build_deck("talk.yaml", "tal
 | In the YAML | In PowerPoint | Editable afterwards |
 |---|---|---|
 | title / section / outline / bullets | Real placeholders from the template layouts | Yes; layouts can be re-applied |
-| `block`, `alertblock`, `exampleblock` | Grouped rounded shapes in theme colors | Yes |
+| `block`, `alertblock`, `exampleblock` | Grouped shapes in theme colors; blocks side by side share one height | Yes |
 | `chart` | **Native chart** | Yes: right-click → Edit Data |
-| `plot` | Academic figure (bar, box, line, scatter, confusion matrix) in the template's fonts and colors | Regenerate from YAML |
-| `table` | **Native table** (booktabs / striped / grid) | Yes |
+| `plot` | Academic figure (bar, box, line, scatter, confusion matrix) as a **vector** in the template's fonts and colors | Regenerate from YAML |
+| `table` | **Native table** (booktabs / striped / grid / plain), auto widths | Yes |
 | `math`, `$inline$` | **Native equation** (needs pandoc) | Yes, in the equation editor |
-| `flow`, `steps` | **Flowcharts and workflow diagrams**: native shapes with connectors glued to them, laid out automatically | Yes: drag a shape and its arrows follow |
-| `placeholder` | Dashed box reserving space for a diagram you haven't made yet | Yes: Shape Fill → Picture |
-| `build`, `animate` | **Native animations** (Animation Pane) | Yes |
-| `transition` | Native slide transitions, including **Morph** | Yes |
-| `image`, `code`, `notes` | Picture, monospace box, speaker notes | Yes |
+| `image`, `images` | PNG/JPG as is; **SVG and PDF as vectors** with a PNG fallback sized to the slide; a row of figures at one height | Yes |
+| `stats` | A row of key numbers with labels | Yes |
+| `flow`, `steps` | **Flowcharts and workflows**: native shapes and glued connectors, laid out automatically | Yes: drag a shape, its arrows follow |
+| `placeholder` | Dashed box reserving space for a figure you haven't made yet | Yes: Shape Fill → Picture |
+| `layout: references` / `closing` | Numbered references split over as many slides as needed / a thank-you slide | Yes |
+| `build`, `animate`, `transition` | **Native animations** and transitions, including **Morph** | Yes |
+| `code`, `notes` | Monospace box, speaker notes | Yes |
+
+Every build checks the YAML: unknown keys, bad values and overfull slides are reported with the slide
+and a suggested fix. `--preview` renders the slides and lets PowerPoint measure real overlaps.
 
 ## Templates
 
-All in `templates/`. Switch with `meta.template` in the YAML or `-t` on the command line.
+All in `templates/`. Switch with `meta.template` or `-t`.
 
 | Template | Style | Inspired by |
 |---|---|---|
-| **`beamer_oxford.pptx`** ★ **default** | Academic, university: navy title bar with a gold stripe, square title box; Constantia headings, Cambria body | University navy-and-gold decks |
-| `beamer_paper.pptx` | Academic, journal: hairline rules instead of bars, grey text footline; Georgia / Times New Roman | Journal / booktabs look |
+| **`beamer_oxford.pptx`** ★ **default** | Academic: navy title bar with a gold stripe, square title box; Constantia / Cambria | University navy and gold |
+| `beamer_paper.pptx` | Academic, journal: hairline rules, grey text footline; Georgia / Times New Roman | Journal / booktabs |
 | `beamer_classic.pptx` | Academic, plain: blue frame titles, no bars; Cambria | Beamer `default` |
+| `beamer_modern.pptx` | Clean sans: white, teal accent bar under titles, left-aligned covers; Calibri Light / Calibri | Modern conference talks |
 | `beamer_blue.pptx` | Blue title bar and footline boxes; Calibri | Beamer `Madrid` |
-| `beamer_charcoal.pptx` | Minimal: dark slate title bar, orange alerts; Calibri | Beamer `metropolis` |
-| `beamer_crimson.pptx` | Light grey title bar with dark red titles; Cambria / Calibri | Beamer `Beaver` |
+| `beamer_charcoal.pptx` | Dark slate title bar, orange alerts; Calibri | Beamer `metropolis` |
+| `beamer_crimson.pptx` | Light grey title bar, dark red titles; Cambria / Calibri | Beamer `Beaver` |
 
-**Beamer Oxford is the default.** It is used whenever the YAML has no `template:` key and no `-t` is
-given. The bundled example decks set `template:` explicitly (to `beamer_blue`), so they override it;
-delete that line to get the default.
-
-Your own or your company's template: see [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md).
+Oxford is used whenever neither `template:` nor `-t` is given (the bundled examples set `beamer_blue`).
+Your own or your company's template: [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md).
 
 ## Example decks
 
-| Folder | Topic | Shows |
+| File | Topic | Shows |
 |---|---|---|
-| `examples/example.yaml` | ppt-templated itself | Every feature once: blocks, charts, plots, tables, math, flowcharts, animation, Morph |
+| `examples/example.yaml` | ppt-templated itself | Every feature once |
 | `transformer/transformer.yaml` | The Transformer architecture | A math-heavy lecture with figure placeholders |
-| `segmentation/segmentation.yaml` | Image segmentation methods | A draft deck: `placeholder:` diagrams and `plot:` sample graphs |
+| `segmentation/segmentation.yaml` | Image segmentation methods | A draft deck: placeholders and sample plots |
 
-Build any of them from inside its folder, e.g. `cd segmentation && python ../ppt_templated.py segmentation.yaml`.
+Build any of them from anywhere, e.g. `python ppt_templated.py segmentation/segmentation.yaml`.
 
 ## Documentation
 
-| Document | Read it when you want to… |
+| Document | Read it to |
 |---|---|
-| **[YAML_GUIDE.md](YAML_GUIDE.md)** | write or edit a content file: **the complete YAML reference** (every key, accepted value and default, chart/plot types, flow shapes, colors, animation, gotchas, recipes, error messages) |
-| [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md) | restyle a template, adapt your company template, or build one in code |
-| this README | get an overview and get started |
+| **[YAML_GUIDE.md](YAML_GUIDE.md)** | write a content file: **the complete reference** (every key, value and default, figures, plots, flows, colors, animation, layout rules, recipes, messages) |
+| [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md) | build a template from a theme file, adapt a company template, or restyle one |
+| this README | get an overview |
 
-You should not need to read `ppt_templated.py`, `plots.py` or `flows.py` to write a deck; if you do, the YAML guide
-is missing something, so please add it.
+You should not need to read the Python files to write a deck; if you do, the guide is missing something.
 
 ## YAML at a glance
-
-A short taste. The full reference is in [YAML_GUIDE.md](YAML_GUIDE.md).
 
 ```yaml
 meta:
   title: My Talk
   author: Jane Doe
   date: today
-  # template: templates/beamer_oxford.pptx   # the default; set another to change the look
   transition: fade
 
 slides:
   - layout: title
-  - layout: outline
 
-  - layout: section
-    title: Results
-
-  - title: Main result
+  - title: Our method in one picture
     content:
       - columns:
-          - width: 0.45
+          - width: 0.5
             content:
-              - placeholder: {label: Pipeline, note: "input → model → output", aspect: "4:3"}
-          - content:
-              - bullets:
-                  - "Accuracy up by ==4.2 points=="
-                  - - on all three datasets
-                  - 'Loss: $\mathcal{L} = -\sum_t \log p(y_t)$'
-                build: true
+              - image: assets/method.svg            # SVG/PDF/PNG: converted and sized automatically
+          - - bullets:
+                - "Accuracy up by ==4.2 points=="
+                - - on all three datasets
+                - 'Loss: $\mathcal{L} = -\sum_t \log p(y_t)$'
+              build: true
 
-  - title: Numbers
+  - title: Results
     content:
+      - stats:
+          - {value: "+4.2", label: accuracy points}
+          - {value: "3×", label: faster inference}
       - plot:
           type: bar
           categories: [A, B, C]
           series: {Baseline: [70, 72, 68], Ours: [74, 77, 71]}
-          values: true
           ylabel: Accuracy (%)
-      - alertblock: {title: Caveat, text: "Single run; see appendix for variance."}
-        animate: fade
 
   - title: Pipeline
     content:
-      - flow:
-          nodes:
-            - {id: data, text: Raw data, shape: data}
-            - {id: prep, text: Preprocess}
-            - {id: ok, text: "Quality OK?", shape: decision}
-            - {id: model, text: Train model}
-          edges: [data -> prep -> ok, "ok -> model: yes", "ok -> prep: no"]
+      - flow: {edges: [Data -> Preprocess -> Train -> Evaluate]}
       - steps: [Collect, Clean, Train, Evaluate]
         highlight: 3
+
+  - layout: references
+    items: ['A. Author, "A paper," *Venue*, 2024.']
+  - layout: closing
 ```
 
-| Slide `layout` | Use |
-|---|---|
-| `title` | Title page from `meta` |
-| `outline` | Table of contents from all `section` slides |
-| `section` | Section divider |
-| `frame` (default) | Normal slide with `title` + `content` |
-| `plain` | No title bar or footline (e.g. "Thank you") |
-
+Slide layouts: `title`, `section`, `outline`, `frame` (default), `plain`, `references`, `closing`.
 Content items: `bullets`, `numbered`, `text`, `block`, `alertblock`, `exampleblock`, `math`, `code`,
-`image`, `placeholder`, `table`, `chart`, `plot`, `flow`, `steps`, `columns`, `spacer`.
+`image`, `images`, `placeholder`, `table`, `chart`, `plot`, `stats`, `flow`, `steps`, `columns`, `spacer`.
 Inline: `**bold**` · `*italic*` · `` `code` `` · `==alert==` · `[link](url)` · `$math$`.
 
-## Draft-first workflow
+## Working loop
 
-A deck can be built before any figure exists:
+1. Write the YAML (start from the skeleton in [YAML_GUIDE.md](YAML_GUIDE.md#2-skeleton)).
+2. `python ppt_templated.py talk.yaml --preview`
+3. Fix every `warning:` line; each names the slide and usually the fix.
+4. Look at the contact sheets `.preview/talk/sheet-*.png` (6 numbered slides each); repeat.
 
-1. **Diagrams:** draw flowcharts and pipelines right away with `flow:` / `steps:`. For other
-   figures use `placeholder:` with a `label`, a `note` describing what to draw, and the final
-   `aspect`. The layout is final from the start.
-2. **Graphs:** use `plot:` (or `chart:`) with sample numbers and a `caption: "Sample data - replace"`.
-3. Build, review the flow, and iterate on the YAML only.
-4. When the real figures arrive, change `placeholder:` to `image: {path: ...}` and put the real
-   numbers into the plots, then rebuild. Or swap boxes in PowerPoint via **Shape Format → Shape Fill → Picture**.
+Before figures exist, use `placeholder:` boxes (with the final `aspect`) and `plot:` with sample
+numbers; the layout is final from the start, and swapping in real figures changes nothing else.
 
 ## Good to know
 
-- **Fitting text.** ppt-templated estimates text size to lay out and shrink content. It doesn't measure
-  fonts exactly, so check dense slides; it prints a warning when content doesn't fit.
-- **Equations** need pandoc when you *generate* the deck, not to open it. Without pandoc they become
-  readable Unicode text (`∫ e^(−x²) dx = √π`). LibreOffice and Google Slides show that text
-  fallback; PowerPoint shows the editable equation.
-- **Images** must be PNG, JPG, GIF, BMP or TIFF. Export SVG/PDF figures to PNG at 200 dpi or more.
-- **Slide numbers** are a live field, so they stay correct when you add or reorder slides.
-- **Footline** text (author, title, date) lives in the slide master: View → Slide Master.
-- **Regenerating** overwrites the output file. Keep manual edits in a copy, or move them into the YAML.
+- **Fitting.** Text sizes are estimated (from the template fonts' widths) to lay out and shrink
+  content; `--preview` with PowerPoint measures the rendered slides and reports real overlaps.
+- **Figures.** SVG and PDF stay vector in PowerPoint 2019/365; other viewers show a 300 dpi PNG
+  rendered at the exact slide size (needs Chrome/Edge or cairosvg; PDF needs PyMuPDF). Converted
+  files are cached in `.ppt-cache/`.
+- **Equations** need pandoc when you *build* the deck. Without it they become Unicode text, which is
+  also what LibreOffice and Google Slides show.
+- **Slide numbers** are a live field; **footline** text lives in the slide master.
+- **Rebuilding overwrites** the output. Keep manual edits in a copy, or move them into the YAML.
 
 ## Project layout
 
 ```
-ppt_templated.py      the generator
-plots.py              draws `plot:` figures (matplotlib, academic defaults)
+ppt_templated.py      the generator (CLI: build, --check, --preview, --inspect)
+plots.py              draws `plot:` figures (matplotlib)
 flows.py              lays out `flow:` / `steps:` diagrams and routes their connectors
-build_template.py     builds the sample templates; shows how to build your own in code
-templates/            six sample templates (beamer_oxford is the default)
+media.py              reads figure files: SVG/PDF/raster sizes, conversion, cache
+preview.py            renders a .pptx to PNGs + contact sheets; measures the layout via PowerPoint
+build_template.py     builds templates from themes (built-in or a theme file)
+templates/            seven sample templates (beamer_oxford is the default)
 examples/             example.yaml → example_deck.pptx: every feature once
 transformer/          The Transformer lecture (YAML + deck)
-segmentation/         Image segmentation methods (YAML + deck; placeholders and sample plots)
+segmentation/         Image segmentation methods (YAML + deck)
 YAML_GUIDE.md         complete content-file reference
 TEMPLATE_GUIDE.md     how to make or adapt a template
 ```
 
 ## Maintaining the docs
 
-**[YAML_GUIDE.md](YAML_GUIDE.md) must be updated every time `ppt_templated.py`, `plots.py` or `flows.py` changes.**
-If a change adds, renames or removes a YAML key, content type, default, chart/plot type, flow shape, color name,
-transition or animation effect, update the guide (and the "at a glance" part of this README if it
-is affected) in the same commit. The guide is the single source of truth for the YAML format.
+**[YAML_GUIDE.md](YAML_GUIDE.md) must change in the same commit as `ppt_templated.py`, `plots.py`,
+`flows.py`, `media.py` or `preview.py`** whenever a YAML key, value, default, item, layout, shape,
+effect or message changes; [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md) with `build_template.py`. Update
+the "at a glance" part of this README if it is affected.

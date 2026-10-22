@@ -1,185 +1,213 @@
-# Template Making Guide
+# Template Guide
 
-This guide explains how a ppt-templated template works and how to make your own. There are three routes:
+How ppt-templated uses a PowerPoint template, and three ways to get one:
 
-- **A.** Restyle one of the sample Beamer templates in PowerPoint (easiest).
-- **B.** Make your company's existing template work with ppt-templated.
-- **C.** Generate templates in code with `build_template.py`.
+- **A. Build one from a theme file** with `build_template.py` (easiest; no PowerPoint needed).
+- **B. Adapt an existing template**, e.g. your company's.
+- **C. Restyle a template by hand** in PowerPoint.
 
----
+> **Maintenance rule:** when `build_template.py` gains or changes a theme key, or `ppt_templated.py`
+> changes what it reads from a template, update this guide in the same commit.
 
-## 1. How a template controls the look
-
-PowerPoint formatting has four levels. Each level inherits from the one above it:
-
-```
-Theme          colors (12 slots) + heading/body fonts
-  └─ Slide Master   background, frame-title bar, footline, text styles (bullets, sizes)
-       └─ Layouts        Title Slide, Section Header, Title and Content, ...  (placeholder positions)
-            └─ Slides         only the content: text, charts, tables
-```
-
-ppt-templated only writes at the **Slides** level and references the other three. That's why:
-
-- changing a theme color later in PowerPoint recolors the whole deck, including blocks and charts
-- slides you add by hand in PowerPoint automatically match the generated ones
-- **Reset** on the Home tab puts a moved placeholder back where the layout says
-
-**Rule of thumb:** put anything that should look the same on every slide in the master or the layouts, not on slides.
+Related: [YAML_GUIDE.md](YAML_GUIDE.md) (content files) · [README.md](README.md).
 
 ---
 
-## 2. What ppt-templated expects from a template
+## 1. What a template provides
 
-### Layouts (found by name)
+ppt-templated writes only slides; everything else comes from the template, so changing a theme
+color in PowerPoint later recolors the whole deck, and slides added by hand match the generated ones.
 
-| ppt-templated uses it for | Layout name | Placeholders it needs |
+```
+Theme            12 colors + heading/body fonts
+ └─ Slide master   background, frame-title bar, footline, text styles (bullets, sizes)
+     └─ Layouts      Title Slide, Section Header, Title and Content, ... (placeholder positions)
+         └─ Slides     content only (written by ppt-templated)
+```
+
+### Layouts (found by name, then by layout type)
+
+| Used for | Layout name | Needs |
 |---|---|---|
-| `layout: title` | **Title Slide** | Title, Subtitle; optionally text placeholders named **Author**, **Institute**, **Date** |
-| `layout: section` | **Section Header** | Title; optionally one text placeholder (the section subtitle) |
-| frames with one bullet list, `outline` | **Title and Content** | Title + one Content placeholder. **Its position defines the content area for every frame.** |
-| frames with two bullet columns | **Two Content** | Title + two Content placeholders |
-| all other frames (charts, blocks, tables…) | **Title Only** | Title |
-| `layout: plain` | **Blank** | none |
+| `layout: title` | **Title Slide** | Title, Subtitle; optional text placeholders **named** `Author`, `Institute`, `Date` (else those lines go under the subtitle) |
+| `layout: section` | **Section Header** | Title; optional one text placeholder (the subtitle) |
+| one bullet list, `outline` | **Title and Content** | Title + one content placeholder. **Its rectangle is the content area of every frame** |
+| two bullet columns | **Two Content** | Title + two content placeholders |
+| every other frame, `references` | **Title Only** | Title |
+| `plain`, `closing` | **Blank** | – |
 
-These are PowerPoint's standard layout names, so most templates already have them. If yours uses other names, either rename the layouts or map them in the content file:
-
-```yaml
-meta:
-  layouts: {title: "Cover", frame: "Content", columns: "Comparison", title_only: "Heading Only", section: "Divider", plain: "Empty"}
-```
-
-If a name isn't found, ppt-templated falls back to the layout *type* (every PowerPoint layout has one), and it stops with a clear message if nothing fits.
-
-**Optional Title Slide fields:** ppt-templated finds the **Author**, **Institute** and **Date** placeholders by their *name* in the Selection Pane. If they're missing, those lines are added under the subtitle instead.
+Other names: map them in the YAML (`meta.layouts: {frame: "Content", title_only: "Heading Only", ...}`)
+or rename the layouts. If nothing fits, the build stops and lists the template's layouts.
+Only the first slide master is used.
 
 ### Theme color roles
 
-| Theme slot | Beamer role | Used for |
+| Slot | Role | Used for |
 |---|---|---|
-| Text/Background Dark 1 (`dk1`) | normal text | body text, table text |
-| Text/Background Light 1 (`lt1`) | background | slide background, text on colored bars |
-| Text/Background Light 2 (`lt2`) | light fill | the Crimson template's title bar; free for your own fills |
-| Hyperlink | links | `[text](url)` |
-| **Accent 1** | *structure* | title box, section box, bullets, `block`, chart series 1 |
-| **Accent 2** | *alert* | `alertblock`, `==alert==` text, series 2 |
+| Dark 1 (`dk1`) | text | body and table text, `muted` (lightened) |
+| Light 1 (`lt1`) | background | slides, text on colored bars |
+| Dark 2 / Light 2 (`dk2`, `lt2`) | free | e.g. frame titles (`tx2`) or a light title bar (`bg2`) |
+| **Accent 1** | *structure* | title box, bullets, `block`, flow nodes, series 1 |
+| **Accent 2** | *alert* | `alertblock`, `==alert==`, series 2 |
 | **Accent 3** | *example* | `exampleblock`, series 3 |
-| Accent 4-6 | — | chart series 4-6 |
+| Accent 4–6 | – | series 4–6 |
+| Hyperlink | links | `[text](url)` |
 
-So when you pick colors, make Accent 1 your main brand color, Accent 2 a warning or highlight color, and Accent 3 a positive or "example" color.
+Make Accent 1 the main color (dark enough for white text on it), Accent 2 a warning/highlight
+color, Accent 3 a positive one.
 
-### Text styles (master body levels)
+### Text styles and sizes
 
-Generated bullet boxes, and bullets inside blocks, **copy the master's bullet styles**: bullet characters, colors, indents and sizes for levels 1-9. Get those right in the master and every list in every deck follows them. ppt-templated also reads the level 1-4 font sizes and the title size from the master.
+Bullet boxes copy the master's body styles (bullet characters, colors, indents, sizes of levels 1–9).
+Item sizes derive from the master's level-1 size: blocks 90%, tables 78%, flows 72%, code 70%,
+captions/charts/plots 66%, references 62%. Text heights are estimated from the theme fonts'
+character widths (known for the common Office fonts; others are estimated conservatively).
 
 ### Footline tokens
 
-Plain text boxes on the master or layouts (not placeholders) can contain tokens. ppt-templated replaces them in the generated deck:
+Plain text boxes (not placeholders) on the master or layouts may contain tokens, replaced on build:
+`{title}` `{short_title}` `{subtitle}` `{author}` `{short_author}` `{institute}` `{short_institute}`
+`{date}`. Combine freely: `{author} ({short_institute})`. Page numbers: a slide-number field.
 
-| Token | Value from `meta` |
-|---|---|
-| `{title}` `{short_title}` | title / short title |
-| `{subtitle}` | subtitle |
-| `{author}` `{short_author}` | author |
-| `{institute}` `{short_institute}` | institute |
-| `{date}` | date (`today` gives today's date) |
+### Check any template
 
-You can combine them freely, e.g. `{author} ({short_institute})`. For the page number, use a **slide-number field** (Insert → Slide Number while editing a text box on the master). It updates automatically on every slide.
-
----
-
-## 3. Route A: Restyle a sample template in PowerPoint
-
-Open `templates/beamer_blue.pptx`. The six preview slides show each layout; ppt-templated deletes them when it builds a deck, so leave them in.
-
-1. **Colors:** **Design → Variants ▸ (the drop-down arrow) → Colors → Customize Colors…**
-   Set Accent 1/2/3 using the roles above. Give the scheme a name and save. Every bar, box, bullet and chart follows.
-2. **Fonts:** **Design → Variants ▸ → Fonts → Customize Fonts…**
-   Set the Heading and Body fonts. Stick to fonts installed on every machine that will open the deck (Calibri, Arial, Cambria, Segoe UI…), or embed them via File → Options → Save → *Embed fonts*.
-3. **Open the master:** **View → Slide Master.** The top, larger thumbnail is the master; the smaller ones under it are the layouts.
-4. **Frame-title bar and footline** are ordinary shapes on the master named *Frame Title Bar*, *Footline Author*, *Footline Title*, *Footline Date* and *Footline Slide Number* (see **Home → Arrange → Selection Pane**).
-   - Recolor a shape via Shape Format → Shape Fill → a *theme* color, so it stays theme-linked.
-   - Resize or delete them as you like. To remove the footline, delete the four footline shapes on the master **and** on the Title Slide and Section Header layouts (those two hide master graphics, so they carry their own copy).
-   - Change what the footline says by editing the token text, e.g. `{short_author}`.
-5. **Bullets:** click the master's body placeholder, select a level's line, then **Home → Bullets ▸ → Bullets and Numbering…** to choose the symbol, color and size. Set font sizes per level the same way.
-6. **Logo:** insert it on the master (it appears on every frame) or only on the Title Slide layout. Keep it clear of the content area (the *Title and Content* body placeholder).
-7. **Content area:** on the **Title and Content** layout, move or resize the content placeholder. ppt-templated uses exactly that rectangle for every frame, including charts and blocks.
-8. **Save** as `.pptx` (or **File → Save As → PowerPoint Template (.potx)**). Point the content file at it: `template: my_template.pptx`.
-
-Layout housekeeping, all in Slide Master view:
-- **Rename a layout:** right-click the thumbnail → *Rename Layout*.
-- **Add a placeholder:** Slide Master tab → *Insert Placeholder* → *Text*, then name it in the Selection Pane (e.g. `Author`).
-- **Hide the master's bar and footline on one layout:** tick *Hide Background Graphics*.
-
-## 4. Route B: Make your company template work
-
-1. Open the company template and check **View → Slide Master** for the six layouts in §2. Most corporate templates have them, sometimes under other names; rename them or use `meta.layouts`.
-2. On **Title Slide**, add text placeholders named **Author**, **Institute**, **Date** if you want those fields placed separately.
-3. Check that **Title and Content** has a sensibly sized content placeholder, since it defines the content area.
-4. Set **Accent 1/2/3** to match the block roles (structure / alert / example).
-5. Optional: add token text boxes (`{author}`, `{date}`…) and a slide-number field if you want a Beamer footline.
-6. Run a test: `python ppt_templated.py examples/example.yaml -t company.potx -o test.pptx`, then go through the checklist in §6.
-
-ppt-templated works with any `.pptx`/`.potx`. Even a stock blank template produces a valid deck; the steps above just make it look intentional.
-
-## 5. Route C: Build templates in code
-
-`build_template.py` builds the sample templates from scratch. To add your own look, copy an entry in `THEMES`:
-
-```python
-"forest": {
-    "label": "Beamer Forest",
-    "colors": dict(dk1="1B1B1B", lt1="FFFFFF", dk2="1F3D2B", lt2="EEF3EF",
-                   accent1="2C5F2D", accent2="C8553D", accent3="3E7CB1",
-                   accent4="E0A458", accent5="7FA99B", accent6="8C8C8C",
-                   hlink="2C5F2D", folHlink="1F3D2B"),
-    "fonts": ("Cambria", "Calibri"),              # (headings, body)
-    "bar": "accent1", "bar_text": "bg1",          # frame-title bar fill, title text color
-    "foot": [("accent1", 50, 0), ("accent1", 75, 0), "accent1"],   # footline segments
-    "foot_text": ["bg1", "bg1", "bg1"],
-},
+```bash
+python ppt_templated.py --inspect my_template.pptx                         # what ppt-templated sees
+python ppt_templated.py examples/example.yaml -t my_template.pptx --preview  # every feature, rendered
 ```
 
-Then run `python build_template.py --theme forest`. Colors are theme references; a tuple like `("accent1", 75, 0)` means "accent 1, luminance 75%" (a darker shade).
-Optional keys change the structure, not just the colors (the three academic templates use them):
+`--inspect` prints, for example:
 
-| Key | Values | Example |
-|---|---|---|
-| `frame` | `"bar"` (default), `"rule"` (hairline under the title), `"plain"` | paper: `rule`, classic: `plain` |
-| `title_color` | frame-title color when there is no bar | `"tx1"`, `"accent1"` |
-| `bar_stripe` / `foot_stripe` | thin stripe under the bar / above the footline | oxford: `"accent4"` (gold) |
-| `footline` | `"boxes"` (default) or `"text"` (grey text only); `foot_rule` adds a hairline above it | paper, classic |
-| `cover` | Title/Section slides: `"box"` (default), `"rules"` (booktabs-style rules), `"plain"`; `cover_text` sets the title color, `radius: 0` makes the box square | paper: `rules`, oxford: square box |
-| `bullets` | `[(char, size %), ...]` for levels 1-3; `bullet_color` | oxford: `[("■", 60), ("–", 100), ("•", 100)]` |
-| `title_bold`, `subtitle_italic` | `True` / `False` | |
+```
+template      templates/beamer_oxford.pptx  (13.33 x 7.50 in)
+layouts       title = 'Title Slide', section = 'Section Header', frame = 'Title and Content', ...
+title slide   placeholders: Title 1, Subtitle 2, Author, Institute, Date
+content area  x 0.60  y 1.30  w 12.13  h 5.60 in (every frame's content goes here)
+fonts         headings Constantia, body Cambria
+text sizes    frame title 28 pt; body levels 22 / 20 / 18 / 16 pt
+colours       dk1 #1C1C1C (text)  lt1 #FFFFFF (background)  dk2 #002147  lt2 #F0EEE8
+              accent1 #002147 (structure)  accent2 #A6192E (alert)  accent3 #3D6B4F (example) ...
+footline      tokens: {author} {date} {short_title}
+```
 
-These add shapes named *Frame Title Rule*, *Frame Title Stripe*, *Footline Rule*, *Footline Stripe* and *Title Rule Top/Bottom*; restyle or delete them in Slide Master view like the bar and footline.
-
-**Fonts for academic decks.** Choose a body font with *lining* figures (digits all the same height). Georgia and Constantia have old-style figures that bounce up and down in tables and chart axes, and PowerPoint can't switch them off, so use them for headings only. Times New Roman and Cambria are safe body fonts. Cambria also matches Cambria Math, the equation font. Georgia, Constantia, Cambria and Times New Roman all come with Office on Windows and Mac.
-
-The geometry constants at the top (`BAR_H`, `TITLE`, `BODY`, `FOOT_H`) move things in every layout at once. The result is a normal template, so you can finish it by hand with Route A.
+Use its fonts and colors when you draw SVG figures, so they match the slides. Then go through the
+checklist in §5 on the contact sheets.
 
 ---
 
-## 6. Test checklist
+## 2. Route A: build a template from a theme file
 
-Build `examples/example.yaml` with your template and open it in PowerPoint:
+```yaml
+# forest.yaml
+name: forest                       # -> templates/beamer_forest.pptx
+label: Beamer Forest
+colors: {dk1: "1B1B1B", lt1: "FFFFFF", dk2: "1F3D2B", lt2: "EEF3EF", accent1: "2C5F2D",
+         accent2: "C8553D", accent3: "3E7CB1", accent4: "E0A458", accent5: "7FA99B",
+         accent6: "8C8C8C", hlink: "2C5F2D", folHlink: "1F3D2B"}
+fonts: [Cambria, Calibri]          # [headings, body]
+frame: bar
+bar_stripe: accent4
+```
 
-- [ ] Title slide: title, subtitle, author, institute and date in the right places
-- [ ] Footline shows your name, short title, date and the correct slide numbers
-- [ ] Frame titles are readable on the title bar (contrast), and long titles shrink without overflowing
-- [ ] Bullets use your symbols and colors at levels 1-3
-- [ ] Blocks: header colors are Accent 1/2/3 and body tints are readable
-- [ ] Charts: series colors come from the accents and are distinguishable
-- [ ] Nothing overlaps a logo or the footline (adjust the content placeholder)
-- [ ] **Home → New Slide** in the generated deck gives slides that match
-- [ ] Slide Show: bullets build on click; Morph works on the two "Morph transitions" frames (Microsoft 365)
+```bash
+python build_template.py --spec forest.yaml            # or -o path/to/out.pptx
+python build_template.py --list                        # built-in themes
+python build_template.py --theme modern                # rebuild one built-in theme
+```
 
-## 7. Pitfalls
+Unknown keys and bad values stop the build with a message naming the valid ones. All keys are
+optional except what you want to change; missing colors come from the Oxford theme.
 
-- **Don't format slides by hand in the template.** Only the master and layouts matter; ppt-templated deletes existing slides.
-- **Use theme colors, not custom RGB,** for anything that should follow the palette ("Theme Colors" row in color pickers).
-- **16:9 vs 4:3:** set the size (Design → Slide Size) *before* designing layouts. Changing it later rescales everything.
-- **Pictures as backgrounds** belong on the master (Format Background → Picture fill), not as a picture shape covering the content area.
-- **Placeholder names vs. layout names:** layouts are matched by *layout* name; Author/Institute/Date are matched by *placeholder* name (Selection Pane).
-- **Keep one master.** ppt-templated uses the layouts of the first master only.
+| Key | Default | Values |
+|---|---|---|
+| `name` | file name | Output `templates/beamer_<name>.pptx` (theme files only) |
+| `label` | `Beamer <Name>` | Theme name shown in PowerPoint |
+| `colors` | Oxford's | The 12 slots of §1 as hex `"RRGGBB"` (quote them in YAML) |
+| `fonts` | `[Calibri, Calibri]` | `[headings, body]` |
+| `frame` | `bar` | Frame titles: `bar` (filled bar) \| `rule` (hairline under the title) \| `accent` (light hairline with a short accent bar) \| `plain` |
+| `bar`, `bar_text` | `accent1`, `bg1` | Bar fill and title color (`frame: bar`) |
+| `bar_stripe` | – | Thin stripe under the bar |
+| `title_color` | `bar_text` | Frame-title color without a bar |
+| `rule` | `tx1` / `accent1` | Hairline color (`frame: rule`); accent-bar color (`frame: accent`, `cover: left`) |
+| `footline` | `boxes` | `boxes` (three colored segments) \| `text` (grey text) |
+| `foot`, `foot_text` | `accent1` ×3, `bg1` ×3 | Segment fills and text colors (`boxes`): author, title, date |
+| `foot_stripe` | – | Stripe above a boxed footline |
+| `foot_rule` | – | Hairline above a text footline |
+| `cover` | `box` | Title and section slides: `box` (filled title box) \| `rules` (rules above and below) \| `left` (flush left, title on an accent bar) \| `plain` |
+| `cover_text` | `bg1` (box), else `accent1` | Cover title color |
+| `radius` | 12000 | Corner of the title box (0 = square; 50000 = round ends) |
+| `bullets` | `[[►, 70], [•, 100], [–, 100]]` | `[char, size %]` per level, repeated for deeper levels |
+| `bullet_color` | `accent1` | |
+| `title_bold`, `subtitle_italic` | false | |
+
+**Color values** in these keys are theme references, so they follow the palette: `accent1`–`6`,
+`tx1`, `tx2`, `bg1`, `bg2`, or `[name, lumMod %, lumOff %]`: `[accent1, 75, 0]` is 25% darker,
+`[tx1, 50, 50]` a mid grey.
+
+**Built-in themes** (`THEMES` in `build_template.py`, same keys):
+
+| Theme | Look | Fonts |
+|---|---|---|
+| `oxford` (default) | Navy bar with gold stripes, square title box | Constantia / Cambria |
+| `paper` | Hairline rules, grey text footline, journal look | Georgia / Times New Roman |
+| `classic` | No bars, blue titles (Beamer default) | Cambria |
+| `modern` | White, teal accent bar under titles, left-aligned covers | Calibri Light / Calibri |
+| `blue` | Blue bar and three-part footline (Madrid) | Calibri |
+| `charcoal` | Dark slate bar, orange alerts (metropolis) | Calibri |
+| `crimson` | Light grey bar, dark red titles (Beaver) | Cambria / Calibri |
+
+**Fonts:** use fonts installed wherever the deck is opened (Office fonts: Calibri, Cambria,
+Constantia, Georgia, Times New Roman, Arial...). For the **body**, pick one with lining figures
+(digits of equal height): Georgia and Constantia have old-style figures that bounce in tables and
+axes, so use them for headings only. Cambria matches Cambria Math, the equation font.
+
+**Geometry** (title bar, content area, footline) is set by the constants at the top of
+`build_template.py` (`BAR_H`, `TITLE`, `BODY`, `FOOT_H`): 16:9, content area 0.6 in from the sides.
+The result is an ordinary template; finish it by hand (Route C) if needed.
+
+## 3. Route B: adapt an existing template
+
+1. `python ppt_templated.py --inspect company.potx` shows which layouts were found.
+2. Missing or differently named layouts: rename them in PowerPoint, or map them in the YAML:
+   `meta.layouts: {title: "Cover", frame: "Content", columns: "Comparison", title_only: "Heading Only", section: "Divider", plain: "Empty"}`.
+3. The **Title and Content** placeholder is the content area: make sure it clears logos and the footer.
+4. Optional: on **Title Slide**, add text placeholders named `Author`, `Institute`, `Date`
+   (Slide Master → Insert Placeholder → Text, then rename in the Selection Pane).
+5. Set Accent 1/2/3 to structure / alert / example colors; optionally add footline token text boxes.
+6. `python ppt_templated.py examples/example.yaml -t company.potx --preview` and go through §5.
+
+Any `.pptx`/`.potx` works; even a stock blank template gives a valid deck.
+
+## 4. Route C: restyle in PowerPoint
+
+Open a template (its preview slides are removed on every build, so leave them).
+
+- **Colors / fonts:** Design → Variants ▸ → Colors / Fonts → Customize.
+- **Master:** View → Slide Master (the top thumbnail is the master, the rest are layouts). Bar,
+  stripes and footline are shapes named *Frame Title Bar*, *Frame Title Stripe/Rule/Accent*,
+  *Footline Author/Title/Date/Slide Number* (Home → Arrange → Selection Pane). Fill them with
+  *theme* colors so they follow the palette. Title Slide and Section Header hide the master's
+  shapes and carry their own footline copy.
+- **Bullets:** select a level of the master's body placeholder → Home → Bullets ▸ → Bullets and Numbering.
+- **Content area:** move/resize the content placeholder of *Title and Content*.
+- **Logo:** on the master (all frames) or the Title Slide layout only; keep it clear of the content area.
+- Save as `.pptx` or `.potx`.
+
+## 5. Checklist (on the `--preview` contact sheets)
+
+- [ ] Title slide: title, subtitle, author, institute and date in place
+- [ ] Footline: name, short title, date, correct slide numbers
+- [ ] Frame titles readable on the bar; long titles shrink without overflowing
+- [ ] Bullets: symbols and colors at levels 1–3
+- [ ] Blocks: Accent 1/2/3 headers, readable tinted bodies
+- [ ] Charts and plots: series colors distinct; text in the template font
+- [ ] Nothing overlaps a logo or the footline; no `(measured)` warnings
+- [ ] In PowerPoint: Home → New Slide gives matching slides; bullets build on click; Morph works
+
+## 6. Pitfalls
+
+- Formatting typed on slides in the template is lost: only the master and layouts count.
+- Use **theme colors**, not custom RGB, for anything that should follow the palette.
+- Set 16:9 or 4:3 (Design → Slide Size) before designing layouts; changing it later rescales everything.
+- Background pictures belong in the master's background fill, not as a picture over the content area.
+- Layouts are matched by *layout* name; `Author`/`Institute`/`Date` by *placeholder* name.
