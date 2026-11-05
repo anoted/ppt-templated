@@ -1,18 +1,23 @@
 # ppt-templated YAML Guide
 
 The complete reference for content files (`*.yaml`): every key, every accepted value, every default.
-Write decks from this guide; you should not need to read `ppt_templated.py`, `plots.py`, `flows.py`
-or `media.py`. If something is missing here, add it.
+Write decks from this guide; you should not need to read `ppt_templated.py`, `plots.py`, `flows.py`,
+`media.py` or `datafiles.py`. If something is missing here, add it.
 
 > **Maintenance rule:** change this guide in the same commit as any change to `ppt_templated.py`,
-> `plots.py`, `flows.py`, `media.py` or `preview.py` that adds, renames or removes a key, value,
-> default, item, layout, shape, effect or message. The README only summarizes.
+> `plots.py`, `flows.py`, `media.py`, `datafiles.py` or `preview.py` that adds, renames or removes a key,
+> value, default, item, layout, shape, effect or message. The README and AGENTS.md only summarize.
 
 **Reading the tables:** *Default* `–` = off / not shown. `a | b` = the complete list of accepted values.
 Unknown keys and values are **reported as warnings** (with a guess such as *did you mean 'color'?*),
 never silently ignored.
 
-Related: [README.md](README.md) (overview) · [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md) (templates).
+Related: [AGENTS.md](AGENTS.md) (the short version, for AI agents) · [README.md](README.md) (overview) ·
+[TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md) (templates).
+
+**What you never have to decide:** positions, sizes, fonts, backgrounds and colours are worked out
+from the template, so one content file gives a finished deck with any of the templates, light or dark.
+Keys such as `size`, `width` or `valign` exist for the rare case a warning asks for them.
 
 ---
 
@@ -37,26 +42,32 @@ python ppt_templated.py talk.yaml --preview    # build talk.pptx, render slide i
 | Command | Does |
 |---|---|
 | `python ppt_templated.py talk.yaml` | Build `talk.pptx` next to the YAML (or `meta.output`). Overwrites it |
-| `... --preview [DIR]` | Also render `slide-NN.png` and contact sheets `sheet-N.png` (6 numbered slides per image) into `.preview/<deck>/` (or DIR). With PowerPoint, the rendered layout is measured too (see below) |
+| `... --preview [DIR]` | Also render `slide-NN.png` and contact sheets `sheet-N.png` (6 numbered slides per image) into `.preview/<deck>/` (or DIR), and measure the rendered layout (see below) |
 | `... --check` | Validate and lay out only; writes nothing (fast) |
+| `... --json` | Print one JSON object to stdout: `ok`, `output`, `dark`, `slides`, `warnings` (`[{slide, message}]`), `slide_info` (per slide: `layout`, `title`, `items`, `fill` = share of the content area used, `text_scale`, `animation_steps`), `preview`. On an error: `{"ok": false, "error": ...}` and exit code 1 |
 | `... --strict` | Exit code 1 if there were warnings |
-| `... -o out.pptx` / `-t templates/x.pptx` | Output path / template (beat `meta.output` / `meta.template`) |
-| `... --keep-template-slides` | Keep the template's own preview slides |
-| `python ppt_templated.py --inspect [TEMPLATE]` | Print a template's layouts, content area, fonts, text sizes, theme colours and footline tokens |
+| `... -o out.pptx` / `-t NAME_OR_PATH` | Output path / template (beat `meta.output` / `meta.template`); `-t midnight` or `-t my.potx` |
+| `... --allow-python` | Run the code of `plot: {type: python}` items (§8.2). Only for YAML you trust |
+| `... --keep-template-slides` | Keep the template's own preview slides (rarely needed) |
+| `python ppt_templated.py --templates [--json]` | List the bundled templates: name, light/dark, look |
+| `python ppt_templated.py --new talk.yaml [-t NAME]` | Write a starter content file (never overwrites) |
+| `python ppt_templated.py --inspect [TEMPLATE]` | Print a template's layouts, content area, light/dark mode, fonts, text sizes, theme colours and footline tokens |
 | `python preview.py deck.pptx` | Preview any `.pptx` |
-| Python | `from ppt_templated import build_deck; build_deck("talk.yaml", "talk.pptx", template=None, check=False)` |
+| Python | `from ppt_templated import build_deck; build_deck("talk.yaml", "talk.pptx", template=None, check=False, allow_python=False)` |
 
-**The loop:** write the YAML → `--preview` → fix every `warning:` line (each names the slide) → look
-at the contact sheets → repeat. Warnings marked `(measured)` come from PowerPoint itself after
-rendering: text that runs into another shape, out of its block, or below the content area. The
-other size checks are estimates, so always look at the sheets.
+**The loop:** write the YAML → `--check --json` → fix every warning (each names the slide) →
+`--preview` → fix `(measured)` warnings and look at the contact sheets → repeat. Warnings marked
+`(measured)` come from the rendered slides: with PowerPoint (Windows) text that runs into another
+shape, out of its block or below the content area; with LibreOffice (any OS, needs PyMuPDF) the
+text lines of the rendered PDF: text that runs into other text, out of the bottom of a block, card or
+box, below the content area, or off the slide. The other size checks are estimates.
 
 - Paths in the YAML (`template`, `output`, image paths) are **relative to the YAML file**; `template`
   is also tried relative to the ppt-templated folder (`templates/beamer_blue.pptx` works anywhere).
-- Rendering needs PowerPoint (Windows, exact) or LibreOffice (any OS; close, no measuring).
+- Rendering needs PowerPoint (Windows, exact) or LibreOffice (any OS; close; measuring needs PyMuPDF).
 - `plot:` needs matplotlib + numpy. Equations become native only with pandoc (`pip install pypandoc_binary`);
-  without it they are written as Unicode text. SVG fallbacks need Chrome/Edge (or `pip install cairosvg`),
-  PDF figures need `pip install pymupdf`.
+  without it they are written as Unicode text. SVG fallbacks use Chrome/Edge or Playwright's headless
+  shell, else cairosvg, else PyMuPDF; PDF figures need `pip install pymupdf`.
 - Generated files: `.preview/` (images) and `.ppt-cache/` (converted figures) next to the deck. Both are disposable.
 
 ## 2. Skeleton
@@ -66,7 +77,8 @@ meta:
   title: My Talk
   author: Jane Doe
   date: today
-  template: templates/beamer_oxford.pptx      # the default; see §4
+  template: oxford          # the default; any bundled name or a .pptx/.potx path, see §4
+  overflow: split           # long lists and tables continue on more slides, see §13
 
 slides:
   - layout: title
@@ -84,10 +96,11 @@ slides:
 ```
 
 Top level: `meta` (mapping) and `slides` (list of mappings). A slide is a mapping; `content` is a list.
+`python ppt_templated.py --new talk.yaml` writes a fuller starter.
 
 ## 3. Cheat sheet
 
-**Slides** (`layout:`): `title` · `section` · `outline` · `frame` (default) · `plain` · `references` · `closing`.
+**Slides** (`layout:`): `title` · `section` · `outline` · `frame` (default) · `plain` · `statement` · `references` · `closing`.
 
 **Content items** (one key per list entry; settings go beside the key or inside its mapping):
 
@@ -105,6 +118,9 @@ Top level: `meta` (mapping) and `slides` (list of mappings). A slide is a mappin
 | `chart` | `- chart: {type: column, categories: [...], series: {...}}` | §6.10 |
 | `plot` | `- plot: {type: bar, categories: [...], series: {...}}` | §8 |
 | `stats` | `- stats: [{value: "95%", label: accuracy}]` | `size`, `color`, `build` |
+| `cards` | `- cards: [{title: Fast, text: "..."}, ...]` | `columns`, `style`, `color`, `build` |
+| `timeline` | `- timeline: [{2019: Idea}, {2021: Prototype}]` | `highlight`, `color`, `build` |
+| `quote` | `- quote: {text: "...", by: Author}` | `size`, `color` |
 | `flow` | `- flow: {edges: [A -> B -> C]}` | §9 |
 | `steps` | `- steps: [Plan, Build, Test]` | `highlight`, `shape`, `build` |
 | `columns` | `- columns: [[...items...], [...items...]]` | per column `width`, `valign`, `animate` |
@@ -112,6 +128,7 @@ Top level: `meta` (mapping) and `slides` (list of mappings). A slide is a mappin
 
 **Any item:** `animate: fade` (entrance), `name: x` (Morph). **Inline:** `**bold**` `*italic*`
 `` `code` `` `==alert==` `[link](url)` `$math$`. **Colors:** `structure` `alert` `example` `muted` `accent1`–`6` `"#RRGGBB"` `[accent1, 0.4]`.
+**Numbers from a file:** `data: results.csv` on `table`, `chart`, `plot` (§6.18).
 
 ## 4. `meta`
 
@@ -121,17 +138,32 @@ Top level: `meta` (mapping) and `slides` (list of mappings). A slide is a mappin
 | `subtitle`, `author`, `institute` | – | Title slide and footline tokens |
 | `date` | today | Any text; `today` → e.g. `October 22, 2026` |
 | `short_title`, `short_author`, `short_institute` | the long ones | Footline tokens `{short_title}` etc. |
-| `template` | `templates/beamer_oxford.pptx` | `.pptx` or `.potx`; `-t` overrides |
+| `template` | `oxford` | A bundled template's name (`midnight`, `beamer_paper`, ...; `--templates` lists them) or a `.pptx`/`.potx` path; `-t` overrides |
 | `output` | `<yaml name>.pptx` | Output path; `-o` overrides |
 | `transition` | – | Default transition of every slide (§12) |
 | `valign` | `center` | Vertical placement of frame content: `center` \| `middle` \| `top` \| `bottom` |
 | `section_style` | `page` | `page` = Section Header slides; `outline` = an outline slide per section, current one bold |
 | `outline_title` | `Outline` | Title of those outline slides |
 | `layouts` | standard names | Map the keys `title`, `section`, `frame`, `columns`, `title_only`, `plain` to your template's layout names (a name or a list to try in order), see [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md) |
+| `overflow` | `shrink` | `shrink` \| `split`: what a frame whose content is **one** `bullets`/`numbered` list or **one** `table` does when it does not fit. `split` continues it on as many slides as needed, titled `Title (1/3)` ..., with the table header repeated and numbering running on. A slide's own `overflow` wins |
+| `logo` | – | A picture (SVG/PNG/...) on the title, section, outline, frame and references slides: `logo: assets/logo.svg` or `{path, dark, position, height}`. `dark`: the picture to use on dark templates; `position`: `top-right` (default) \| `top-left` \| `bottom-right` \| `bottom-left`; `height`: 0.45 in (1.5× on the title slide). On frames it is centred on the title band and the title is narrowed to end before it |
 
-**Templates** in `templates/`: `beamer_oxford` (**default**; navy bar, gold stripe, serif) ·
-`beamer_paper` (journal look, rules) · `beamer_classic` (Beamer default) · `beamer_modern` (clean sans,
-teal accent) · `beamer_blue` (Madrid) · `beamer_charcoal` (metropolis) · `beamer_crimson` (Beaver).
+**Templates** (`--templates` prints this list; every content file works with every one of them):
+
+| Name | Mode | Look |
+|---|---|---|
+| `oxford` (default) | light | Navy title bar, gold stripes, Constantia / Cambria |
+| `paper` | light | Journal look: hairline rules, grey footline, Georgia / Times New Roman |
+| `classic` | light | No bars, blue titles, Cambria (Beamer default) |
+| `modern` | light | White, teal accent bar under titles, Calibri |
+| `blue` · `charcoal` · `crimson` | light | Beamer Madrid · metropolis · Beaver |
+| `minimal` | light | Black on white, bold titles, one red accent, Arial |
+| `parchment` | light | Paper texture, sepia ink, serif |
+| `notebook` | light | Graph-paper background, ink-blue and red-pen accents |
+| `midnight` | dark | Deep slate with fine grain, sky-blue structure |
+| `graphite` | dark | Graphite bar with an orange stripe (metropolis, dark) |
+| `aurora` | dark | Blue-to-violet gradient, cyan structure |
+| `chalkboard` | dark | Blackboard texture, chalk-white text, yellow titles |
 
 ## 5. Slide layouts
 
@@ -143,8 +175,9 @@ Keys on **every** slide: `layout` (default `frame`), `notes` (speaker notes; use
 | `title` | `title`, `subtitle`, `author`, `institute`, `date` (all default to `meta`) | Title Slide layout. Titles over 2 lines shrink to 28 pt |
 | `section` | `title`, `subtitle` | Section Header (or an outline slide with `meta.section_style: outline`) |
 | `outline` | `title` (default `Outline`) | Numbered list of all `section` titles |
-| `frame` | `title`, `subtitle` (smaller second line), `content`, `valign` | A normal slide. Long titles shrink to fit one line (a warning says when they still wrap) |
+| `frame` | `title`, `subtitle` (smaller second line), `content`, `valign`, `overflow` | A normal slide. Long titles shrink to fit one line (a warning says when they still wrap) |
 | `plain` | `content`, `valign` | No title bar or footline; content in a 0.6 in margin |
+| `statement` | `text` (the message), `title` (small label above it, structure colour), `subtitle` (muted line below) | One big centred message on the Blank layout, in the heading font, sized to fill the slide in at most three lines. For a takeaway, a question to the audience, a transition. `title` alone is used as the message |
 | `references` | `items` (list, one entry per reference), `title` (`References`), `size` (62% of body level 1, ≥ 12 pt), `start` (1), `numbered` (true) | Hanging-indent list `[1] ...`. Too many for one slide → continues on more slides titled `References (1/2)`, entries spread evenly. An entry that starts with its own label (`"[12] ..."`) keeps it; numbering continues after it |
 | `closing` | `title` (`Thank you!`), `subtitle` (`Questions?`; `""` hides it), `text` (extra lines: contact, link) | End slide on the Blank layout, title in the heading font |
 
@@ -160,8 +193,8 @@ a bare list = `bullets`.
 - **Settings may sit inside the item's mapping or beside the item key**; both mean the same:
   `- image: {path: fig.png, width: 0.5}` = `- image: fig.png` + `width: 0.5` on the next line.
 - `animate` (entrance, §12), `name` (Morph, §12) and `build` (step-by-step reveal) work on any item
-  except `spacer` (`build` only on `bullets`, `numbered`, `images`, `stats`, `flow`, `steps`; `columns`
-  takes `animate` only). They may also sit either beside the key or inside the mapping.
+  except `spacer` (`build` only on `bullets`, `numbered`, `images`, `stats`, `cards`, `timeline`, `flow`,
+  `steps`; `columns` takes `animate` only). They may also sit either beside the key or inside the mapping.
 - Items stack top to bottom with a 0.25 in gap; see §13 for sizing.
 
 ### 6.1 `bullets` / `numbered`
@@ -183,7 +216,9 @@ a bare list = `bullets`.
 | `size` | master level sizes | Level-1 size (pt); deeper levels keep the master's proportions |
 | `color` | master | Any color (§11) |
 
-`numbered` numbers the top level `1. 2. 3.`; sub-entries keep bullets.
+`numbered` numbers the top level `1. 2. 3.`; sub-entries keep bullets. `start: 5` starts at 5
+(continuation slides made by `overflow: split` set it themselves). From 10 on, the indent widens so
+the numbers fit.
 
 ### 6.2 `text`
 
@@ -323,6 +358,8 @@ Later: change `placeholder:` to `image:` (same `width`), or in PowerPoint use Sh
 | `width` | fit to text (55–100%) | Fraction of the available width |
 | `size` | 78% of level 1 | pt |
 | `caption` | – | Below the table |
+| `data` | – | A CSV/TSV/JSON file: its first row is the header, the rest the rows (§6.18) |
+| `select` | all columns | With `data`: the columns to show, in this order, e.g. `[Model, Accuracy]` |
 
 Auto widths keep short columns on one line and share the rest among long-text columns. Rows grow
 for wrapped text; the space is reserved below the table, so it does not run into the next item.
@@ -356,6 +393,8 @@ for wrapped text; the space is reserved below the table, so it does not run into
 | `width` | 1.0 | Fraction of the width |
 | `height` | 4.2 | Preferred height (in); shrinks to 2.2 |
 | `caption` | – | Below the chart |
+| `data` | – | A CSV/TSV/JSON file: the `x` column (default the first) gives the categories, the `y` columns (default every other numeric column) the series; scatter: x and y values (§6.18) |
+| `x`, `y` | first column, numeric columns | With `data`: column names |
 
 Series colors are accents 1–6; all text uses the template's body font. Edit data: right-click → Edit Data.
 **`chart` or `plot`?** `chart` when the audience edits numbers in PowerPoint; `plot` for box plots,
@@ -376,7 +415,7 @@ confusion matrices, error bars/bands, trend lines, log axes, publication styling
 | `size` | 180% of level 1 | Size of the numbers (pt); labels are 80% of level 1, muted |
 | `color` | `structure` | Color of the numbers (per entry `color` wins) |
 
-Equal-width cells across the row; 2–4 entries read best.
+Equal-width cells (at most 3.6 in each), the row centred; 2–4 entries read best.
 
 ### 6.12 `columns`
 
@@ -407,6 +446,90 @@ See [§9](#9-flows-and-steps) and [§8](#8-plots).
 
 `- spacer: 0.3` adds blank vertical space (inches).
 
+### 6.15 `quote`
+
+```yaml
+- quote: {text: "Simplicity is prerequisite for reliability.", by: "Edsger W. Dijkstra"}
+- quote: "Short form: just the text"
+```
+
+| Key | Default | Accepted values |
+|---|---|---|
+| `text` | required | The quotation; curly quotes are added unless it starts with one |
+| `by` | – | Attribution, shown as `— by` in muted text |
+| `size` | 110% of level 1 | pt |
+| `color` | `structure` | The bar on the left |
+
+### 6.16 `timeline`
+
+```yaml
+- timeline:
+    - 2019: Idea                         # date: text
+    - "2021: First prototype"            # the same, as one quoted string
+    - {date: 2023, text: "Paper accepted", color: alert}
+  highlight: 3                           # "we are here": larger dot, bold text, the others muted
+  build: true                            # one event per click
+```
+
+Events are spaced evenly along a line (not by date), dates above, text below.
+
+| Key | Default | Accepted values |
+|---|---|---|
+| entries | required | `{date: text}`, `"date: text"`, `{date, text, color}`, or a text without a date |
+| `highlight` | – | Number or list (1 = first) |
+| `color` | `structure` | Dots, dates, line (per entry `color` wins) |
+| `size` | 72% of level 1 | Text size (pt); dates 12% larger |
+
+### 6.17 `cards`
+
+```yaml
+- cards:
+    - {title: Fast, text: "Builds a deck in seconds"}
+    - {title: Editable, bullets: [native shapes, native charts]}
+    - {title: Themed, text: "Light and dark templates", color: alert}
+    - Deterministic: "Same YAML, same deck"     # title: text
+  build: true                                     # one card per click
+```
+
+A grid of rounded cards with an accent strip, title and text or bullets; cards in a row share one
+height and a short last row is centred. Columns: all in one row up to 4 cards, 3 per row for 5, 6 or 9,
+else 4.
+
+| Key | Default | Accepted values |
+|---|---|---|
+| entries | required | `{title, text}`, `{title, bullets}`, `{title: text}`, `{..., color}` or a title alone |
+| `columns` | automatic | Cards per row |
+| `style` | `tinted` | `tinted` (light fill) \| `outline` \| `solid` (filled, text in the background colour) |
+| `color` | `structure` | Card colour (per card `color` wins) |
+| `size` | 78% of level 1 | Text size (pt); titles 15% larger |
+
+### 6.18 `data`: numbers from a file
+
+`table`, `chart` and `plot` read their numbers from a CSV, TSV or JSON file (relative to the YAML) with
+`data:`; keys written in the YAML win over what the file gives (e.g. a `title` or `ylabel`).
+
+```yaml
+- table: {data: results.csv, select: [Model, Accuracy], caption: "Table 1"}
+- chart: {type: line, data: sales.csv}                        # first column = categories
+- plot:  {type: line, data: log.csv, x: epoch, y: [train, val], ylabel: Loss}
+- plot:  {type: box, data: samples.csv}                       # every numeric column is a group
+```
+
+| Item | What the file gives |
+|---|---|
+| `table` | `header` = first row, `rows` = the rest, as written (text) |
+| `chart` | `categories` = column `x` (default first), `series` = columns `y` (default: every other numeric column); axis title from the `x` column; scatter: `[x, y]` points |
+| `plot` `bar` | `categories` + `series` as for charts |
+| `plot` `line` | `x` = column `x` (numbers or labels), `series` = columns `y`, `xlabel` from the header |
+| `plot` `scatter` | points `[x, y]` per `y` column, `xlabel` (and `ylabel` for one series) from the header |
+| `plot` `box` / `hist` | one group / sample per `y` column (default: every numeric column) |
+| `plot` `heatmap` / `confusion` | `matrix` from the `y` columns, labels from the header and the `x` column |
+| `plot` `python` | `data` = `{header, rows, columns}` for your code |
+
+CSV delimiters (`,` `;` tab `|`) are detected. JSON: a list of records, a list of rows (first =
+header) or `{header, rows}`. Numbers may use thousands separators (`1,234.5`) or end in `%`; empty
+cells are gaps. A column name that does not exist is reported with the closest match.
+
 ## 7. Figures: images, SVG, PDF
 
 Any figure file works; conversion is automatic and sized to the exact box on the slide:
@@ -421,20 +544,25 @@ Any figure file works; conversion is automatic and sized to the exact box on the
 
 - Aspect ratio: from the pixels (raster), `width`/`height` or `viewBox` (SVG), or the page (PDF).
 - An SVG needs a `viewBox` or a `width` and `height`. Linked images inside it are embedded.
-- Fallback PNGs come from headless Chrome/Edge (or cairosvg) and are cached in `.ppt-cache/`.
+- Fallback PNGs come from headless Chrome/Edge or Playwright's headless shell (set
+  `PPT_TEMPLATED_BROWSER` to pick one), else cairosvg, else PyMuPDF, and are cached in `.ppt-cache/`.
+  A browser that hangs (common in containers) is given up after 30 s and not tried again in that build.
 - `vector: false` embeds only the PNG (for an SVG feature PowerPoint draws badly).
 - Raster figures under 100 dpi at their size get a warning; prefer SVG for diagrams.
 - **Drawing your own SVGs:** use the template's fonts and colours (`--inspect` prints them), a
-  `viewBox` about 100 units per inch of slide, and text ≥ 14 units tall.
+  `viewBox` about 100 units per inch of slide, text ≥ 14 units tall, and a **transparent background**
+  (no white rectangle), so the figure also works on dark and textured templates.
 
 ## 8. Plots
 
 `plot:` draws a matplotlib figure at its exact slide size in the template's body font and accent
-colours, embedded as a vector SVG (with a PNG fallback). Regenerate from YAML to change it.
+colours (light or dark), embedded as a vector SVG (with a PNG fallback). Regenerate from YAML to change
+it. When the template font is not installed (e.g. Calibri in a Linux container), a metric-compatible
+stand-in is used (Carlito, Caladea, Liberation), else a sans or serif fallback matching the template.
 
 ```yaml
 - plot:
-    type: bar                      # bar | box | line | scatter | confusion
+    type: bar                      # bar | box | line | scatter | hist | heatmap | confusion | function | python
     categories: [BLEU, ROUGE-L]
     series: {Baseline: [27.3, 41.2], Ours: [28.4, 43.9]}
     errors: {Baseline: [0.4, 0.6], Ours: [0.3, 0.5]}
@@ -446,7 +574,8 @@ colours, embedded as a vector SVG (with a PNG fallback). Regenerate from YAML to
 
 | Key | Default | Accepted values |
 |---|---|---|
-| `type` | required | `bar` \| `box` \| `line` \| `scatter` \| `confusion` |
+| `type` | required | `bar` \| `box` \| `line` \| `scatter` \| `hist` \| `heatmap` \| `confusion` \| `function` \| `python` |
+| `data` | – | A CSV/TSV/JSON file instead of numbers in the YAML (§6.18) |
 | `title`, `xlabel`, `ylabel` | – | Text; `$...$` math (single-quote the string) |
 | `legend` | `best` with 2+ named series | `best` \| `top` \| `bottom` \| `right` (outside) \| any matplotlib location (`upper left`, ...) \| `none` |
 | `grid` | `y` for bar/box (`x` if horizontal), `both` otherwise | `x` \| `y` \| `both` \| `none` |
@@ -489,10 +618,57 @@ straight on log axes); `trend_label` (R² in the legend, true); `markers` (shape
 `value_format` (`"{:.0f}"`, `"{:.2f}"` when normalized); `colorbar` (true); `square` (true).
 Axis labels default to *Predicted* / *True*.
 
+**`hist`**: `series: {name: [samples]}` (or `values`/`y`: one sample); `bins` (`auto`, a number or a list
+of edges); `density`; `stacked`; `cumulative`; `range` (`[lo, hi]`); `alpha` (0.9, 0.6 when several
+overlap).
+
+**`heatmap`**: `matrix` (rows of numbers, any shape); `xlabels`, `ylabels` (or `labels` for both);
+`values` (cell numbers, default on up to 144 cells); `value_format` (`"{:.2g}"`); `vmin`, `vmax`;
+`center` (a value such as 0: diverging colours, alert below and structure above); `colorbar` (true);
+`square` (false).
+
+**`function`**: draws formulas, no data needed.
+
+```yaml
+- plot:
+    type: function
+    functions: {"$\\sigma(x)$": "sigmoid(x)", ReLU: "max(x, 0)", "k = 2": "tanh(k*x)"}
+    params: {k: 2}               # names usable in the formulas
+    x: [-4, 4]                   # range of x (default [-5, 5]); xscale: log works too
+- plot: {type: function, f: "normal(x, 0, 1.5)", x: [-6, 6], title: Gaussian}
+```
+
+`f` (one formula) or `functions` (`{label: formula}` or `{label: {f, style, color}}`); `x` (range);
+`samples` (400); `params`; `dashes`; `line_width`. Formulas use `x`, numbers, `+ - * / ^ ** %`,
+comparisons, `a if cond else b`, `pi`, `e`, and the functions `sin cos tan arcsin arccos arctan atan2
+sinh cosh tanh exp log ln log2 log10 log1p sqrt abs sign floor ceil round min max where clip mod sigmoid
+relu softplus heaviside erf gamma normal(x, mu, sd)`. `^` is a power, as in maths. Nothing else is
+evaluated (no Python), so formulas are safe in any file. Points where a formula is undefined are gaps.
+
+**`python`**: your own matplotlib code, drawn in the template's fonts and colours at the slide's
+exact size. Runs only with `--allow-python`.
+
+```yaml
+- plot:
+    type: python
+    code: |                       # or script: figs/attention.py (relative to the YAML)
+      t = np.linspace(0, 10, 200)
+      ax.plot(t, np.sin(t) * np.exp(-t / 5), color=colors[0], label="damped")
+      ax.fill_between(t, 0, np.sin(t) * np.exp(-t / 5), color=tint("structure", 0.7))
+      ax.legend()
+    xlabel: Time (s)              # the common options still apply to ax
+```
+
+The code sees `fig`, `ax` (empty axes; more may be added to `fig`), `np`, `colors` (the six series
+colours as hex), `color(spec)` (any colour spec of §8.3 → hex), `tint(spec, amount)`, `size` (font
+size in pt) and `data` (with `data:`, `{header, rows, columns}`). No legend or grid is added unless
+`legend`/`grid` is set.
+
 ### 8.3 Plot colors
 
 Under `colors:`; each value is a theme role (`structure`, `alert`, `example`, `muted`, `accent1`–`6`,
-`tx1`, `bg1`, ...), a tint `[accent1, 0.5]`, `none`, or a matplotlib color (`"#1F3A5F"`, `tab:blue`).
+`tx1`, `bg1`, ...), a tint `[accent1, 0.5]` (towards the slide background), `none`, or a matplotlib
+color (`"#1F3A5F"`, `tab:blue`).
 
 | Type | Keys |
 |---|---|
@@ -502,6 +678,9 @@ Under `colors:`; each value is a theme role (`structure`, `alert`, `example`, `m
 | `line` | `marker_face`, `marker_edge`, `band`, `error` |
 | `scatter` | `edge`, `trend` |
 | `confusion` | `low`, `high` (scale ends) or `cmap`, `text_light`, `text_dark`, `cell_edge`, `axis`, `tick` |
+| `heatmap` | `low`, `high`, `mid` (with `center`) or `cmap`, `text_light`, `text_dark`, `axis`, `tick` |
+| `hist` | `edge` |
+| `function` | per function `color` |
 
 ## 9. Flows and steps
 
@@ -613,10 +792,12 @@ One vocabulary everywhere (`color`, `text_color`, block, flow, edge and group co
 | `muted` | text color, 45% lighter (grey) |
 | `white` / `background` / `bg1` | background color |
 | `text` / `tx1`, `tx2`, `bg2`, `accent1`–`accent6` | theme slots |
-| `"#FF8800"` | fixed RGB (does not follow the template; quote it) |
-| `[accent1, 0.4]` | lighter (0 to 1) or darker (0 to -1) |
+| `"#FF8800"` | fixed RGB (does not follow the template and may vanish on a dark one; quote it) |
+| `[accent1, 0.4]` | moved towards the slide background (0 to 1): lighter on a light template, darker on a dark one; negative values move away from it |
 
-Theme-linked colors follow the template, so `-t` restyles the whole deck. Plots also accept matplotlib colors (§8.3).
+Theme-linked colors follow the template, so `-t` restyles the whole deck, light or dark: tinted
+fills (block bodies, table stripes, flow nodes, code boxes) are made towards the background, and
+text on solid accent fills uses the background colour. Plots also accept matplotlib colors (§8.3).
 
 ## 12. Animation, transitions, Morph
 
@@ -631,7 +812,7 @@ Theme-linked colors follow the template, so `-t` restyles the whole deck. Plots 
 `animate: true` = fade on click. Captions animate with their figure. On `columns` (or one column) the whole row (column) appears as one step.
 
 **Step-by-step (`build`):** `true` or an effect name. `bullets`/`numbered`: one top-level entry per
-click (like `\pause`); `images`, `stats`, `steps`: one entry per click; `flow`: one step along the flow per click.
+click (like `\pause`); `images`, `stats`, `cards`, `timeline`, `steps`: one entry per click; `flow`: one step along the flow per click.
 
 **Transitions (`transition`)** on `meta` or a slide: `fade` or `{type: push, speed: fast}`.
 `type`: `fade` \| `push` \| `wipe` \| `cover` \| `dissolve` \| `split` \| `zoom` \| `morph` \| `none`;
@@ -653,6 +834,12 @@ item without `build` is one group, so it morphs as a whole.
 text shrinks in steps to 65% (warning below 90%); past that, *content does not fit*. Text heights are
 estimated from the template fonts' widths, not measured: use `--preview`, which measures.
 
+**Too long for one slide:** with `overflow: split` (on `meta` or the slide) a frame whose content is
+one `bullets`/`numbered` list or one `table` and would shrink below 90% is continued on as many slides
+as needed (`Title (1/2)`, `Title (2/2)`): entries are spread evenly, a top-level bullet keeps its
+sub-bullets, numbering runs on, table headers repeat with the same column widths, and the caption goes
+under the last part. Speaker notes stay on the first part. Any other content shrinks as described.
+
 **Default sizes** (from the template master; `--inspect` prints them): body level 1 (e.g. 22 pt),
 blocks 90%, tables 78%, flows 72%, code 70%, captions/charts/plots 66%, references 62%.
 
@@ -663,6 +850,7 @@ blocks 90%, tables 78%, flows 72%, code 70%, captions/charts/plots 66%, referenc
 - Key results: `stats` or a short `table`; trends: `plot`; editable numbers: `chart`.
 - A row of blocks for comparisons (they align automatically); `alertblock` for the one takeaway.
 - Diagrams: `flow`/`steps` when they are boxes and arrows, an SVG otherwise, `placeholder` until drawn.
+- Parallel ideas: `cards`; events: `timeline`; the one sentence to remember: `layout: statement`.
 - End with `layout: references` and `layout: closing`.
 - No warnings, no `(measured)` overlaps, nothing tiny, no half-empty slides.
 
@@ -740,6 +928,30 @@ blocks 90%, tables 78%, flows 72%, code 70%, captions/charts/plots 66%, referenc
 
 **Roadmap across a talk:** repeat a `steps:` row on several slides with a different `highlight:`.
 
+**Results straight from the experiment's CSV**
+
+```yaml
+- title: "Ours is best on every metric"
+  content:
+    - columns:
+        - - table: {data: results/summary.csv, select: [Model, BLEU, ROUGE-L]}
+        - - plot: {type: line, data: results/curve.csv, x: step, y: [baseline, ours], ylabel: Loss}
+```
+
+**The key message on its own slide**
+
+```yaml
+- layout: statement
+  title: Main result
+  text: "Same accuracy at a tenth of the cost"
+```
+
+**Activation functions without computing a single point**
+
+```yaml
+- plot: {type: function, functions: {sigmoid: "sigmoid(x)", tanh: "tanh(x)", ReLU: "relu(x)"}, x: [-4, 4]}
+```
+
 **Draft before figures exist:** `placeholder:` with `label`, `note` and the final `aspect`; `plot:`
 with sample numbers and `caption: "Sample data - replace"`. Swap in the real files later.
 
@@ -758,17 +970,25 @@ Errors stop the build and name the slide (`error: slide 7 "Results": ...`); warn
 | `<kind> needs settings, e.g. ...` | Give the item a mapping (or list) as shown |
 | `build works on ... only - use animate` | `build` is for lists, rows and diagrams |
 | `text shrunk to N% to fit` / `bullets shrunk to N%` | Too much on the slide: cut or split |
-| `content does not fit even at 65%` | Split the slide |
+| `content does not fit even at 65%` | Split the slide (or `overflow: split` for one list/table) |
+| `overflow: split works when the content is one bullets/numbered list or one table` | Split by hand, or reduce the slide to one list/table |
 | `title wraps even at N pt` | Shorten the title |
 | `x.png is only N dpi at this size` | Use a larger image or an SVG |
-| `no SVG renderer ...` | Install Chrome/Edge or `pip install cairosvg` |
+| `no SVG renderer ...` | `pip install pymupdf` (or install Chrome/Edge, or `pip install cairosvg`) |
 | `image not found: <path>` | Paths are relative to the YAML |
 | `x.svg: the SVG needs a viewBox ...` | Add `viewBox="0 0 W H"` to the `<svg>` tag |
 | `PDF figures need PyMuPDF` | `pip install pymupdf`, or export SVG/PNG |
 | `flow diagram drawn with N pt text` | Give it more room, split it, or change `direction` |
 | `... runs into ... (measured)` | Real overlap found by PowerPoint: shorten, resize, or move to a new slide |
 | `... runs N pt below the content area (measured)` | Content spills into the footline: cut or split |
-| `text runs N pt out of the bottom of ... (measured)` | A block's text is too long for it |
+| `text runs N pt out of the bottom of ... (measured)` | A block's (card's, node's) text is too long for it |
+| `... runs off the side of the slide (measured)` | A long word or equation: shorten it or give it more width |
+| `template not found: x. ... bundled name: ...` | Use a listed name or a path relative to the YAML |
+| `data file not found` · `no column 'x' (did you mean 'y'?)` · `row N, column 'c': 'v' is not a number` | Fix the path, the column name or the cell (§6.18) |
+| `plot type 'python' runs Python code from the YAML` | Add `--allow-python` (only for files you trust) |
+| `unknown name / function '...' in formula` | §8.2 `function` lists what formulas may use |
+| `statement needs text` · `quote needs text` · `timeline/cards needs a list` | Give the item its text or list |
+| `meta.logo ...` | A path (relative to the YAML), or `{path, dark, position, height}` |
 | `unknown chart type` · `plot type must be one of ...` · `unknown flow shape` | See §6.10, §8, §9.3 |
 | `bar series 'A' has 3 values for 4 categories` | Match `categories` |
 | `flow edge needs two node ids, like 'a -> b'` · `flow node id(s) used twice` | Fix the edge string / ids |

@@ -1,5 +1,6 @@
 # Example deck for ppt-templated - shows every feature.
 #   python ppt_templated.py examples/example.yaml
+#   python ppt_templated.py examples/example.yaml -t midnight -o dark.pptx    # the same deck, dark
 # Everything below is content only; all styling comes from the template.
 
 meta:
@@ -232,6 +233,50 @@ slides:
       - steps:
           items: [Plan, Build, Measure, Learn]
           shape: box                         # boxes joined by arrows instead of chevrons
+
+  # ------------------------------------------------------------------------------
+  - layout: section
+    title: Slide patterns
+    subtitle: Common slides without any layout work
+
+  - layout: statement
+    title: Statement slide
+    text: "One message, sized to fill the slide"
+    subtitle: "layout: statement"
+
+  - title: Cards for parallel ideas
+    content:
+      - cards:
+          - {title: Content first, text: "The YAML says what; the template says how."}
+          - {title: Any template, text: "Light, dark or textured: the same file.", color: example}
+          - {title: Native objects, bullets: [charts, tables, equations]}
+        build: true                          # one card per click
+
+  - title: Timeline and quote
+    content:
+      - timeline:
+          - 2019: First idea
+          - 2021: Prototype
+          - 2023: "Paper at a major venue"
+          - 2025: Public release
+        highlight: 3
+      - quote: {text: "Simplicity is prerequisite for reliability.", by: "Edsger W. Dijkstra"}
+
+  - title: Numbers from a CSV file
+    content:
+      - columns:
+          - - table: {data: assets/results.csv, caption: "Read from assets/results.csv"}
+          - - plot: {type: bar, data: assets/results.csv, y: [Accuracy], ylabel: "Accuracy (%)",
+                     ylim: [75, 90], values: true}
+
+  - title: Formulas drawn as plots
+    content:
+      - plot:
+          type: function                     # no data points in the YAML: just the formulas
+          functions: {sigmoid: "sigmoid(x)", tanh: "tanh(x)", ReLU: "relu(x)"}
+          x: [-4, 4]
+          ylim: [-1.2, 2]
+          xlabel: '$x$'
 
   # ------------------------------------------------------------------------------
   - layout: section

@@ -4,20 +4,24 @@ ppt_templated.py - build an editable, Beamer-style PowerPoint deck from a YAML c
 
     python ppt_templated.py talk.yaml                  # -> talk.pptx
     python ppt_templated.py talk.yaml --preview        # ... and slide PNGs + contact sheets to look at
-    python ppt_templated.py talk.yaml --check          # validate and lay out only, write nothing
+    python ppt_templated.py talk.yaml --check --json   # validate and lay out only; a JSON report
+    python ppt_templated.py --templates                # the bundled templates, light and dark
+    python ppt_templated.py --new talk.yaml -t midnight  # a starter content file
     python ppt_templated.py --inspect templates/beamer_blue.pptx   # what a template provides
 
-The formatting lives in the TEMPLATE (slide master, layouts, theme colours and fonts).
-The CONTENT FILE only says what goes on each slide. Everything in the output is a native,
-editable PowerPoint object: real placeholders, native charts (right-click > Edit Data),
-native tables, native equations (when pandoc is installed) and native animations.
+The formatting lives in the TEMPLATE (slide master, layouts, theme colours and fonts, background).
+The CONTENT FILE only says what goes on each slide; positions, sizes and colours are worked out here,
+so the same content file gives a finished deck with any template, light or dark. Everything in the
+output is a native, editable PowerPoint object: real placeholders, native charts (right-click > Edit
+Data), native tables, native equations (when pandoc is installed) and native animations.
 
 Requirements:  pip install python-pptx pyyaml pillow
 Optional:      pandoc (or `pip install pypandoc_binary`) for native, editable equations.
                matplotlib + numpy for `plot:` figures (see plots.py).
-               Chrome/Edge (or cairosvg) for the PNG fallback of SVG figures, PyMuPDF for PDF figures.
-Helpers: flows.py lays out `flow:` / `steps:` diagrams, media.py converts figure files,
-preview.py renders slides to PNG.
+               PyMuPDF for PDF figures, SVG fallbacks without a browser and LibreOffice layout checks;
+               Chrome/Edge (or cairosvg) for the best PNG fallback of SVG figures.
+Helpers: flows.py lays out `flow:` / `steps:` diagrams, media.py converts figure files, datafiles.py
+reads `data:` files, preview.py renders slides to PNG and measures the layout.
 
 Unknown keys, overfull slides and other problems are reported as warnings naming the slide.
 See YAML_GUIDE.md for the complete content-file reference and TEMPLATE_GUIDE.md for making templates.
@@ -34,6 +38,7 @@ import difflib
 import hashlib
 import io
 import itertools
+import json
 import math
 import os
 import re
@@ -42,7 +47,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import yaml
 from lxml import etree
@@ -106,47 +111,57 @@ SEMANTIC = {
 BLOCK_COLORS = {"block": "accent1", "alertblock": "accent2", "exampleblock": "accent3"}
 
 ITEM_TYPES = ("bullets", "numbered", "text", "block", "alertblock", "exampleblock", "chart", "table",
-              "image", "images", "placeholder", "plot", "flow", "steps", "stats", "math", "code", "columns", "spacer")
-LAYOUTS = ("title", "section", "outline", "frame", "plain", "references", "closing")
+              "image", "images", "placeholder", "plot", "flow", "steps", "stats", "math", "code", "columns", "spacer",
+              "quote", "timeline", "cards")
+LAYOUTS = ("title", "section", "outline", "frame", "plain", "statement", "references", "closing")
 
 # ---- what the YAML may contain (checked on every build; unknown keys are reported, not ignored) ----
 META_KEYS = {"title", "subtitle", "author", "institute", "date", "short_title", "short_author", "short_institute",
-             "template", "output", "transition", "valign", "section_style", "outline_title", "layouts"}
+             "template", "output", "transition", "valign", "section_style", "outline_title", "layouts", "overflow",
+             "logo"}
 SLIDE_KEYS = {  # besides layout, notes, transition
     "title": {"title", "subtitle", "author", "institute", "date"},
     "section": {"title", "subtitle"},
     "outline": {"title"},
-    "frame": {"title", "subtitle", "content", "valign"},
+    "frame": {"title", "subtitle", "content", "valign", "overflow"},
     "plain": {"content", "valign"},
+    "statement": {"title", "text", "subtitle"},
     "references": {"title", "items", "references", "size", "start", "numbered"},
     "closing": {"title", "subtitle", "text"},
 }
 ITEM_OPTS = {"animate", "build", "name"}          # allowed beside the item key or inside its mapping
-BUILDABLE = {"bullets", "numbered", "flow", "steps", "images", "stats"}
+BUILDABLE = {"bullets", "numbered", "flow", "steps", "images", "stats", "timeline", "cards"}
 BLOCK_KEYS = {"title", "text", "bullets", "color", "size"}
 SETTINGS = {  # item settings; plot, flow and steps take theirs from plots.py / flows.py
-    "bullets": {"size", "color"}, "numbered": {"size", "color"},
+    "bullets": {"size", "color"}, "numbered": {"size", "color", "start"},
     "text": {"size", "align", "color", "bold", "italic"},
     "math": {"size"}, "code": {"size"}, "spacer": set(), "columns": set(),
     "block": BLOCK_KEYS, "alertblock": BLOCK_KEYS, "exampleblock": BLOCK_KEYS,
     "image": {"path", "width", "height", "caption", "alt", "page", "vector"},
     "images": {"items", "height", "width", "gap", "caption"},
     "placeholder": {"label", "note", "aspect", "width", "height", "caption", "alt"},
-    "table": {"header", "rows", "style", "align", "widths", "width", "size", "caption"},
+    "table": {"header", "rows", "style", "align", "widths", "width", "size", "caption", "data", "select"},
     "chart": {"type", "categories", "series", "stacked", "title", "legend", "labels", "percent", "number_format",
-              "y_title", "x_title", "y_min", "y_max", "smooth", "gap_width", "width", "height", "caption"},
+              "y_title", "x_title", "y_min", "y_max", "smooth", "gap_width", "width", "height", "caption",
+              "data", "x", "y"},
     "stats": {"items", "size", "color"},
     "flow": flows.FLOW_KEYS, "steps": flows.STEPS_KEYS,
+    "quote": {"text", "by", "size", "color"},
+    "timeline": {"items", "highlight", "color", "size"},
+    "cards": {"items", "columns", "color", "size", "style"},
 }
-MAPPED = {"block", "alertblock", "exampleblock", "image", "placeholder", "table", "chart", "plot", "flow"}
-LISTED = {"steps", "images", "stats"}               # a list (settings beside it) or a mapping with `items`
-SHORT = {"block": "text", "alertblock": "text", "exampleblock": "text", "image": "path", "placeholder": "label"}
+MAPPED = {"block", "alertblock", "exampleblock", "image", "placeholder", "table", "chart", "plot", "flow", "quote"}
+LISTED = {"steps", "images", "stats", "timeline", "cards"}  # a list (settings beside it) or a mapping with `items`
+SHORT = {"block": "text", "alertblock": "text", "exampleblock": "text", "image": "path", "placeholder": "label",
+         "quote": "text"}
 EXAMPLES = {
     "block": "{title: ..., text: ...}", "alertblock": "{title: ..., text: ...}", "exampleblock": "{title: ..., text: ...}",
     "image": "{path: fig.svg}", "placeholder": "{label: Diagram}", "table": "{header: [A, B], rows: [[1, 2]]}",
     "chart": "{type: column, categories: [...], series: {...}}", "plot": "{type: bar, categories: [...], series: {...}}",
     "flow": "{nodes: [...], edges: ['a -> b']}", "steps": "[Collect, Clean, Train]", "images": "[a.png, b.svg]",
-    "stats": "[{value: '95%', label: accuracy}]",
+    "stats": "[{value: '95%', label: accuracy}]", "quote": "{text: ..., by: ...}",
+    "timeline": "[{date: 2024, text: Founded}, {date: 2025, text: First release}]",
+    "cards": "[{title: Fast, text: ...}, {title: Cheap, text: ...}]",
 }
 CHOICES = {  # (where, key) -> accepted values
     ("text", "align"): ("left", "center", "right", "justify"),
@@ -154,6 +169,8 @@ CHOICES = {  # (where, key) -> accepted values
     ("column", "valign"): ("center", "middle", "top"),
     ("table", "style"): ("booktabs", "striped", "grid", "plain"),
     ("chart", "legend"): ("bottom", "top", "right", "left", "none"),
+    ("slide", "overflow"): ("shrink", "split"),
+    ("cards", "style"): ("tinted", "outline", "solid"),
 }
 SYNONYMS = {"colour": "color", "font_size": "size", "fontsize": "size", "src": "path", "file": "path",
             "url": "path", "halign": "align", "alignment": "align", "entries": "items", "list": "items"}
@@ -168,6 +185,7 @@ FLOW_MIN_PT = 9   # flow/steps diagrams shrink to fit, but their text not below 
 GAP = 0.25        # vertical gap between stacked items (inches)
 COL_GAP = 0.4     # gap between columns (inches)
 STAT_GAP = 0.3    # gap between the cells of a `stats` row (inches)
+STAT_MAX_W = 3.6  # widest cell of a `stats` row (inches): two or three numbers stay close together
 MIN_PT = 12       # smallest text size that still reads on a projected slide (pt)
 SVG_EXT = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"
 NS_ASVG = "http://schemas.microsoft.com/office/drawing/2016/SVG/main"
@@ -240,50 +258,52 @@ def est_lines(text: str, width_in: float, size_pt: float, char_w: float = 0.5) -
     return total
 
 
-def set_color(font, spec) -> None:
-    """spec: any colour spec of resolve_color(), e.g. 'accent1' | 'alert' | ['tx1', 0.4] | '#RRGGBB'."""
-    if spec is None:
-        return
-    paint(font.color, spec)
-
-
 def resolve_color(spec):
-    """Colour spec -> (kind, value, brightness); kind 'theme' (slot name) or 'rgb' (hex).
+    """Colour spec -> (kind, value, soft); kind 'theme' (slot name) or 'rgb' (hex).
     spec: structure | alert | example | muted | white | accent1-6 | tx1 | tx2 | bg1 | bg2 | '#RRGGBB'
-    | [spec, brightness] (positive = lighter, negative = darker)."""
-    bright = 0.0
+    | [spec, soft]. soft > 0 moves the colour towards the slide background (lighter on a light template,
+    darker on a dark one), soft < 0 away from it, so one content file reads well on any template."""
+    soft = 0.0
     if isinstance(spec, (list, tuple)) and len(spec) == 2:
-        spec, bright = spec[0], float(spec[1])
+        try:
+            soft = float(spec[1])
+        except (TypeError, ValueError):
+            raise ValueError(f"colour {list(spec)!r}: the second value must be a number from -1 to 1") from None
+        spec = spec[0]
     spec = str(spec)
     if spec in SEMANTIC:
         spec, base = SEMANTIC[spec]
-        bright = base + (1 - base) * bright if bright >= 0 else bright
-    if spec.startswith("#"):
-        return "rgb", spec[1:], bright
+        soft = base + (1 - base) * soft if soft >= 0 else soft
+    if re.fullmatch(r"#[0-9A-Fa-f]{6}", spec):
+        return "rgb", spec[1:].upper(), max(-1.0, min(1.0, soft))
     if spec not in THEME:
         raise ValueError(f"unknown colour {spec!r}: use structure, alert, example, muted, white, "
-                         f"accent1-6, tx1, tx2, bg1, bg2, '#RRGGBB' or [colour, brightness]")
-    return "theme", spec, bright
+                         f"accent1-6, tx1, tx2, bg1, bg2, '#RRGGBB' or [colour, amount]")
+    return "theme", spec, max(-1.0, min(1.0, soft))
 
 
-def paint(color_format, spec, tint: float = 0.0) -> None:
-    """Set a fill/line ColorFormat from a colour spec, optionally lightened further by `tint` (0-1)."""
-    kind, val, bright = resolve_color(spec)
+def paint(color_format, spec, tint: float = 0.0, dark: bool = False) -> None:
+    """Set a fill/line/font ColorFormat from a colour spec, moved a further `tint` (0-1) towards the
+    background. dark: the template has a dark background, so 'towards the background' means darker."""
+    kind, val, soft = resolve_color(spec)
     if kind == "rgb":
         color_format.rgb = RGBColor.from_string(val)
     else:
         color_format.theme_color = THEME[val]
     if tint:
-        bright = bright + (1 - bright) * tint if bright >= 0 else tint
-    if bright:
-        color_format.brightness = max(-1.0, min(1.0, bright))
+        soft = soft + (1 - soft) * tint if soft >= 0 else tint
+    if soft:
+        color_format.brightness = max(-1.0, min(1.0, -soft if dark else soft))
 
 
-def fill_theme(fill, name: str, brightness: float = 0.0) -> None:
-    fill.solid()
-    fill.fore_color.theme_color = THEME[name]
-    if brightness:
-        fill.fore_color.brightness = brightness
+def luminance(hex_rgb: str) -> float:
+    """Relative luminance (0 = black, 1 = white) of 'RRGGBB'."""
+    try:
+        r, g, b = (int(hex_rgb[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    except (TypeError, ValueError):
+        return 1.0
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in (r, g, b)]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
 
 
 def drop_style(shape) -> None:
@@ -326,8 +346,8 @@ def pPr_insert(pPr, el) -> None:
     pPr.append(el)
 
 
-def set_bullet(paragraph, kind: str | None) -> None:
-    """kind: None (inherit) | 'none' | 'number'."""
+def set_bullet(paragraph, kind: str | None, start: int = 1) -> None:
+    """kind: None (inherit) | 'none' | 'number' (numbering from `start`)."""
     if kind is None:
         return
     pPr = paragraph._p.get_or_add_pPr()
@@ -341,6 +361,8 @@ def set_bullet(paragraph, kind: str | None) -> None:
     elif kind == "number":
         el = etree.SubElement(etree.Element("x"), qn("a:buAutoNum"))
         el.set("type", "arabicPeriod")
+        if start and int(start) > 1:
+            el.set("startAt", str(int(start)))
         pPr_insert(pPr, el)
 
 
@@ -358,6 +380,39 @@ def copy_body_style(prs, text_frame) -> None:
         txBody.replace(old, new)
     else:
         txBody.insert(1, new)
+
+
+def item_kinds(content) -> list:
+    """Item names of a content list, without checking it (for reports)."""
+    out = []
+    for it in content if isinstance(content, list) else []:
+        if isinstance(it, str) or (isinstance(it, (int, float)) and not isinstance(it, bool)):
+            out.append("text")
+        elif isinstance(it, list):
+            out.append("bullets")
+        elif isinstance(it, dict):
+            out.append(next((k for k in it if k in ITEM_TYPES), "?"))
+    return out
+
+
+def paginate(heights, cap) -> list:
+    """Split entries of the given heights into pages of at most `cap` (an entry taller than cap gets a page of
+    its own) -> [[index, ...], ...]. Entries are spread evenly instead of leaving a short last page."""
+    def pack(limit):
+        pages, used = [[]], 0.0
+        for i, h in enumerate(heights):
+            if pages[-1] and used + h > limit:
+                pages.append([])
+                used = 0.0
+            pages[-1].append(i)
+            used += h
+        return pages
+
+    pages = pack(cap)
+    if len(pages) > 1:
+        even = pack(max(sum(heights) / len(pages) * 1.05, max(heights)))
+        pages = even if len(even) == len(pages) else pages
+    return pages
 
 
 def flatten_bullets(items, level=0):
@@ -650,38 +705,94 @@ def style_sizes(prs):
     return sizes, title
 
 
+def template_names() -> dict:
+    """Bundled templates: {short name: path}, e.g. {'oxford': '.../templates/beamer_oxford.pptx'}."""
+    out = {}
+    folder = os.path.join(HERE, "templates")
+    for f in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        stem, ext = os.path.splitext(f)
+        if ext.lower() in (".pptx", ".potx") and not f.startswith("~$"):
+            out[stem[7:] if stem.startswith("beamer_") else stem] = os.path.join(folder, f)
+    return out
+
+
+def find_template(name, base_dir: str = ".", from_cli: bool = False) -> str:
+    """A template path from a path or a bundled template's short name (oxford, midnight, beamer_paper, ...).
+    A relative path is tried from the YAML's folder (from_cli: the working folder first), then the
+    ppt-templated folder. None = the default (Oxford)."""
+    if not name:
+        return DEFAULT_TEMPLATE
+    name = str(name)
+    here = [os.path.join(base_dir, name), name] if not from_cli else [name, os.path.join(base_dir, name)]
+    cands = [name] if os.path.isabs(name) else here + [os.path.join(HERE, name)]
+    for c in cands:
+        if os.path.isfile(c):
+            return c
+    stem = os.path.splitext(os.path.basename(name))[0].lower()
+    known = template_names()
+    for key in (stem, stem[7:] if stem.startswith("beamer_") else None):
+        if key and key in known:
+            return known[key]
+    raise SystemExit(f"error: template not found: {name}. Give a .pptx/.potx path (relative to the YAML) or a "
+                     f"bundled name: {', '.join(known)}{suggest(stem, known)}")
+
+
+def describe_templates() -> list:
+    """[(name, light|dark, description)] of the bundled templates, for --templates."""
+    rows = []
+    for name, path in template_names().items():
+        try:
+            prs = open_template(path)
+        except Exception as exc:  # noqa: BLE001 - a broken file should not hide the others
+            rows.append((name, "?", f"cannot open: {exc}"))
+            continue
+        cp = prs.core_properties
+        mode = cp.category if cp.category in ("light", "dark") else None
+        if mode is None:
+            b = DeckBuilder.__new__(DeckBuilder)
+            b.prs = prs
+            colors = b._theme()[0]
+            mode = "dark" if luminance(colors["bg1"]) < luminance(colors["tx1"]) else "light"
+        rows.append((name, mode, cp.subject or cp.title or ""))
+    return rows
+
+
 # --------------------------------------------------------------------------------------
 # The deck builder
 # --------------------------------------------------------------------------------------
 class DeckBuilder:
     def __init__(self, content: dict, template: str | None = None, base_dir: str = ".",
-                 substitute_tokens: bool = True, keep_template_slides: bool = False, check_only: bool = False):
+                 substitute_tokens: bool = True, keep_template_slides: bool = False, check_only: bool = False,
+                 allow_python: bool = False):
         self.meta = content.get("meta", {}) or {}
         self.slides_spec = content.get("slides", []) or []
         if not isinstance(self.meta, dict) or not isinstance(self.slides_spec, list):
             raise SystemExit("error: the YAML needs `meta:` (a mapping) and `slides:` (a list)")
         self.base_dir = base_dir
         self.warnings, self._where = [], "meta"
+        self.problems = []                    # [{"slide": n or None, "message": ...}] for --json
+        self.slide_info = []                  # one record per slide written, for --json
+        self._slide_no = None
         self.check_only = check_only          # lay out and validate only: no conversions, nothing saved
+        self.allow_python = allow_python      # `plot: {type: python}` runs code from the YAML
         self.cache_dir = os.path.join(base_dir, ".ppt-cache")
         self._media_cache, self._svg_parts = {}, {}
         self._check("", self.meta, META_KEYS)
+        if self.meta.get("layouts") is not None and not isinstance(self.meta.get("layouts"), dict):
+            raise SystemExit("error: meta.layouts must be a mapping, e.g. {frame: Content, title: Cover}")
         self._check("layouts", self.meta.get("layouts"), set(DEFAULT_LAYOUTS))
-        tpl = template or self.meta.get("template") or DEFAULT_TEMPLATE
-        if not os.path.isabs(tpl) and not os.path.exists(tpl):
-            cand = os.path.join(base_dir, tpl)
-            tpl = cand if os.path.exists(cand) else os.path.join(HERE, tpl)
-        if not os.path.exists(tpl):
-            raise SystemExit(f"error: template not found: {template or self.meta.get('template')} (relative "
-                             f"paths are tried from the YAML's folder, then the ppt-templated folder)")
-        self.template_path = tpl
-        self.prs = open_template(tpl)
+        self.template_path = (find_template(template, base_dir, from_cli=True) if template
+                              else find_template(self.meta.get("template"), base_dir))
+        self.prs = open_template(self.template_path)
         if not keep_template_slides:
             remove_all_slides(self.prs)
-        self.layouts = self._resolve_layouts(self.meta.get("layouts", {}))
+        self.layouts = self._resolve_layouts(self.meta.get("layouts") or {})
         self.level_sizes, self.title_size = style_sizes(self.prs)
-        fonts = self._theme()[1]  # character widths of the body and heading fonts, for text estimates
+        lvl1 = self.prs.slide_master._element.find(f"{qn('p:txStyles')}/{qn('p:bodyStyle')}/{qn('a:lvl1pPr')}")
+        self.body_indent = to_in(int(lvl1.get("marL", 342900))) if lvl1 is not None else 0.375
+        colors, fonts = self._theme()  # character widths of the body and heading fonts, for text estimates
         self.cw, self.cw_head = (CHAR_W.get(str(fonts[k]).lower(), 0.5) for k in ("minor", "major"))
+        self.dark = luminance(colors["bg1"]) < luminance(colors["tx1"])  # light text on a dark background
         self.W, self.H = to_in(self.prs.slide_width), to_in(self.prs.slide_height)
         self.area = self._content_area()
         self.math_jobs = []       # (latex, display, run-properties element)
@@ -691,6 +802,7 @@ class DeckBuilder:
         self.section_no = 0
         self.substitute_tokens = substitute_tokens
         self._flow_cache = {}
+        self.logo = self._logo_spec(self.meta.get("logo"))
 
     # ---- template introspection -------------------------------------------------------
     def _resolve_layouts(self, overrides):
@@ -747,13 +859,16 @@ class DeckBuilder:
             })
         cp = self.prs.core_properties
         cp.title, cp.author = str(m.get("title", "")), str(m.get("author", ""))
+        cp.subject, cp.keywords, cp.category = str(m.get("subtitle", "")), "", ""  # not the template's own
 
         for i, spec in enumerate(self.slides_spec, 1):
             if not isinstance(spec, dict):
                 self._where = f"YAML slide {i}"
                 self.warn("not a mapping (start it with `- title: ...` or `- layout: ...`) - skipped")
                 continue
-            n, label = len(self.prs.slides) + 1, spec.get("title")
+            n = len(self.prs.slides) + 1
+            label = spec.get("title") or (spec.get("text") if spec.get("layout") == "statement" else None)
+            self._slide_no = n
             self._where = (f'slide {n} "{strip_markup(str(label))[:50]}"' if label
                            else f"slide {n} ({spec.get('layout', 'frame')})")
             try:
@@ -763,16 +878,18 @@ class DeckBuilder:
             except Exception as exc:  # stop at the first bad slide and name it
                 kind = "" if isinstance(exc, (ValueError, FileNotFoundError)) else f"{type(exc).__name__}: "
                 raise SystemExit(f"error: {self._where}: {kind}{exc}") from None
-        self._where = ""
+        self._where, self._slide_no = "", None
         if not self.check_only:
             self._finalize_math(list(self.prs.slides))
         return self.prs
 
     # ---- problems ----------------------------------------------------------------------
-    def warn(self, msg: str) -> None:
-        line = f"{self._where}: {msg}" if self._where else msg
+    def warn(self, msg: str, slide: int | None = None) -> None:
+        where = self._where or (f"slide {slide}" if slide else "")
+        line = f"{where}: {msg}" if where else msg
         if line not in self.warnings:
             self.warnings.append(line)
+            self.problems.append({"slide": slide or self._slide_no, "message": msg})
             warn(line)
 
     def _check(self, where, d, allowed):
@@ -802,8 +919,19 @@ class DeckBuilder:
                       f"content: - moved there")
             spec = {**{k: v for k, v in spec.items() if k not in moved},
                     "content": [{k: spec[k]} for k in moved]}
-        self._check("", spec, SLIDE_KEYS[kind] | {"layout", "notes", "transition"})
+        if not spec.get("_part"):
+            self._check("", spec, SLIDE_KEYS[kind] | {"layout", "notes", "transition"})
+        if kind == "frame" and not spec.get("_part"):
+            parts = self._split_frame(spec)
+            if len(parts) > 1:  # too long for one slide: continued on as many slides as needed
+                slides = []
+                for k, part in enumerate(parts):
+                    self._slide_no = len(self.prs.slides) + 1
+                    self._where = f'slide {self._slide_no} "{strip_markup(str(part.get("title", "")))[:50]}"'
+                    slides += self._build_slide(part if k == 0 else {**part, "notes": None})
+                return slides
         self.steps, self.builds = [], {}
+        self._fill_info = None  # (share of the content area used, text scale) of a frame or plain slide
         if kind == "title":
             slides = [self._title_slide(spec)]
         elif kind == "section":
@@ -820,8 +948,10 @@ class DeckBuilder:
             self._remove_empty_placeholders(slide, keep=set())
             m = 0.6
             self._render_items(slide, self._prepare(spec.get("content")), Box(m, m, self.W - 2 * m, self.H - 2 * m),
-                               spec.get("valign", "center"))
+                               spec.get("valign", "center"), top=True)
             slides = [slide]
+        elif kind == "statement":
+            slides = [self._statement_slide(spec)]
         elif kind == "references":
             slides = self._references_slides(spec)
         elif kind == "closing":
@@ -833,7 +963,16 @@ class DeckBuilder:
                 self.steps, self.builds = [], {}
             if spec.get("notes") and k == 0:
                 slide.notes_slide.notes_text_frame.text = str(spec["notes"]).strip()
+            if kind in ("title", "section", "outline", "frame", "references"):
+                self._place_logo(slide, big=(kind == "title"))
             self._apply_timing(slide, spec.get("transition", self.meta.get("transition")))
+            title = spec.get("title") or (spec.get("text") if kind == "statement" else "")
+            self.slide_info.append({
+                "slide": len(self.slide_info) + 1, "layout": kind, "title": strip_markup(str(title or "")),
+                "items": item_kinds(spec.get("content")) if kind in ("frame", "plain") else [],
+                "fill": None if self._fill_info is None or k else round(self._fill_info[0], 2),
+                "text_scale": None if self._fill_info is None or k else self._fill_info[1],
+                "animation_steps": len(self.steps)})
         return slides
 
     def _set_title(self, slide, text, subtitle=None, fit_width=None):
@@ -843,7 +982,7 @@ class DeckBuilder:
         tf = ph.text_frame
         tf.clear()
         size = self.title_size
-        width = fit_width or to_in(ph.width) or self.W - 1
+        width = (fit_width or to_in(ph.width) or self.W - 1) - self._logo_reserve(slide)
         lines = est_lines(text, width - 0.2, size, self.cw_head)
         if lines > 1:  # beamer-like: shrink long frame titles instead of overflowing the bar
             size = max(size * 0.72, size / lines ** 0.5)
@@ -963,7 +1102,7 @@ class DeckBuilder:
         self._set_title(slide, spec.get("title", ""), spec.get("subtitle"))
         keep = {slide.shapes.title.placeholder_format.idx} if slide.shapes.title else set()
         self._remove_empty_placeholders(slide, keep)
-        self._render_items(slide, items, self.area, valign)
+        self._render_items(slide, items, self.area, valign, top=True)
         return slide
 
     def _delete_slide(self, slide):
@@ -1017,6 +1156,9 @@ class DeckBuilder:
                 opts.setdefault(k, inner.pop(k))
             inner = {**rest, **inner}           # settings written beside the item key count as well
             self._check(kind, inner, self._allowed(kind, inner))
+            if kind in ("table", "chart", "plot") and inner.get("data") is not None:
+                import datafiles  # numbers from a CSV/TSV/JSON file
+                inner = datafiles.apply(kind, inner, self.base_dir)
             out = {kind: inner}
         elif kind == "columns":
             self._check(kind, rest, set())
@@ -1101,6 +1243,12 @@ class DeckBuilder:
             return pref, True, min(pref, 1.2 + sub + cap)
         if kind == "stats":
             return self._stats_geometry(it, w, scale)[4], False, 0
+        if kind == "quote":
+            return self._quote_geometry(it, w, scale)[3], False, 0
+        if kind == "timeline":
+            return self._timeline_geometry(it, w, scale)[-1], False, 0
+        if kind == "cards":
+            return self._cards_geometry(it, w, scale)[-1], False, 0
         if kind == "plot":
             p, ratio = self._figure(kind, it)
             if ratio is None:
@@ -1203,7 +1351,8 @@ class DeckBuilder:
         return heights, sum(heights) + gaps
 
     # ---- items: rendering ---------------------------------------------------------------
-    def _render_items(self, slide, items, box, valign="center", scale=None):
+    def _render_items(self, slide, items, box, valign="center", scale=None, top=False):
+        """Stack items in box, shrinking text to fit. top: the slide's whole content (recorded for --json)."""
         items = self._prepare(items)
         if not items:
             return
@@ -1218,6 +1367,8 @@ class DeckBuilder:
                 self.warn(f"content does not fit even at 65% (needs {total:.1f} in, has {box.h:.1f} in) "
                           f"- split the slide or cut content")
         heights, total = self._plan(items, box, scale)
+        if top:
+            self._fill_info = (total / box.h if box.h else 0.0, scale)
         free = max(0.0, box.h - total)
         y = box.y + {"top": 0.0, "bottom": free}.get(valign, free / 2)
         for (kind, it), h in zip(items, heights):
@@ -1252,6 +1403,12 @@ class DeckBuilder:
             self._render_images(slide, it, b, scale)
         elif kind == "stats":
             self._render_stats(slide, it, b, scale)
+        elif kind == "quote":
+            self._render_quote(slide, it, b, scale)
+        elif kind == "timeline":
+            self._render_timeline(slide, it, b, scale)
+        elif kind == "cards":
+            self._render_cards(slide, it, b, scale)
         elif kind == "placeholder":
             self._render_placeholder(slide, it, b, scale)
         elif kind == "plot":
@@ -1301,11 +1458,21 @@ class DeckBuilder:
         """Writes paragraphs; returns [(first_para, last_para), ...] per top-level item."""
         groups = []
         tf.clear()
+        start = int(opts.get("start") or 1)
+        last = start + sum(1 for lvl, _ in paras if lvl == 0) - 1
+        hang = None
+        if numbered and last >= 10:  # "10." needs a wider hanging indent than the master's bullets
+            size = self._sz(0, scale, opts)
+            hang = max(self.body_indent, ((len(str(last)) + 1) * 0.56 * size / 72 + 0.1))
         for i, (lvl, text) in enumerate(paras):
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
             p.level = min(lvl, 8)
             if numbered and lvl == 0:
-                set_bullet(p, "number")
+                set_bullet(p, "number", start)
+                if hang:
+                    pPr = p._p.get_or_add_pPr()
+                    pPr.set("marL", str(int(hang * EMU)))
+                    pPr.set("indent", str(-int(hang * EMU)))
             style = {"size": self._sz(lvl, scale, opts) if explicit_size else None}
             if opts.get("color"):
                 style["color"] = opts["color"]
@@ -1323,6 +1490,9 @@ class DeckBuilder:
         groups = self._write_bullets(tf, paras, 1.0, it, numbered=(kind == "numbered"), explicit_size=False)
         need = self._text_height(paras, to_in(ph.width), 1.0, it)
         have = to_in(ph.height)
+        used = min(1.0, need / have) if have else 1.0
+        prev = getattr(self, "_fill_info", None)
+        self._fill_info = (max(used, prev[0] if prev else 0.0), round(min(1.0, have / need), 2) if need else 1.0)
         if need > have:  # same thing PowerPoint's "shrink text on overflow" stores in the file
             scale = max(0.55, have / need)
             if scale < 0.9:
@@ -1395,7 +1565,7 @@ class DeckBuilder:
         if style.get("font"):
             f.name = style["font"]
         if style.get("color"):
-            set_color(f, style["color"])
+            self._font_color(f, style["color"])
         if style.get("href"):
             r.hyperlink.address = style["href"]
         return r
@@ -1417,7 +1587,7 @@ class DeckBuilder:
         drop_style(body)
         body.adjustments[0] = min(0.5, radius / min(b.w, b.h))
         body.fill.solid()
-        paint(body.fill.fore_color, color, 0.85)
+        self._paint(body.fill.fore_color, color, 0.85)
         body.line.fill.background()
         tf = body.text_frame
         tf.word_wrap = True
@@ -1439,7 +1609,7 @@ class DeckBuilder:
         head.adjustments[0] = min(0.5, radius / min(b.w, head_h))
         head.adjustments[1] = 0.0
         head.fill.solid()
-        paint(head.fill.fore_color, color)
+        self._paint(head.fill.fore_color, color)
         head.line.fill.background()
         htf = head.text_frame
         htf.word_wrap = True
@@ -1459,7 +1629,7 @@ class DeckBuilder:
         shp = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, inch(b.x), inch(b.y), inch(b.w), inch(b.h))
         drop_style(shp)
         shp.adjustments[0] = min(0.5, 0.06 / min(b.w, b.h))
-        fill_theme(shp.fill, "tx1", 0.95)
+        self._fill(shp.fill, "tx1", 0.95)
         shp.line.fill.background()
         shp.name = "Code"
         tf = shp.text_frame
@@ -1474,7 +1644,7 @@ class DeckBuilder:
             r.text = line if line else " "
             r._r.find(qn("a:t")).set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
             r.font.name, r.font.size = "Courier New", Pt(size)
-            set_color(r.font, "tx1")
+            self._font_color(r.font, "tx1")
         self._animate(it, shp, "sp_text")
 
     # ---- charts -------------------------------------------------------------------------
@@ -1519,13 +1689,13 @@ class DeckBuilder:
         chart = gf.chart
         fs = round(self.level_sizes[0] * 0.66 * scale, 1)
         chart.font.size = Pt(fs)
-        set_color(chart.font, ("tx1", 0.25))
+        self._font_color(chart.font, ("tx1", 0.25))
         if c.get("title"):
             chart.has_title = True
             chart.chart_title.text_frame.text = str(c["title"])
             tr = chart.chart_title.text_frame.paragraphs[0].runs[0].font
             tr.size, tr.bold = Pt(fs * 1.15), True
-            set_color(tr, "structure")
+            self._font_color(tr, "structure")
         else:
             chart.has_title = False
         pie = ctype in ("pie", "doughnut")
@@ -1545,7 +1715,7 @@ class DeckBuilder:
             s = plot.series[0]
             for j in range(len(c.get("categories", []))):
                 pt = s.points[j]
-                fill_theme(pt.format.fill, palette[j % 6], 0.0 if j < 6 else 0.4)
+                self._fill(pt.format.fill, palette[j % 6], 0.0 if j < 6 else 0.4)
                 pt.format.line.color.theme_color = MSO_THEME_COLOR.BACKGROUND_1
         else:
             for i, s in enumerate(plot.series):
@@ -1559,18 +1729,17 @@ class DeckBuilder:
                     try:
                         s.marker.style = XL_MARKER_STYLE.CIRCLE
                         s.marker.size = 7
-                        fill_theme(s.marker.format.fill, col)
+                        self._fill(s.marker.format.fill, col)
                         s.marker.format.line.color.theme_color = THEME[col]
                     except Exception:
                         pass
                 else:
-                    fill_theme(s.format.fill, col)
+                    self._fill(s.format.fill, col)
             if ctype.startswith(("column", "bar")):
                 plot.gap_width = int(c.get("gap_width", 70))
             va = chart.value_axis
             va.has_major_gridlines = True
-            va.major_gridlines.format.line.color.theme_color = MSO_THEME_COLOR.TEXT_1
-            va.major_gridlines.format.line.color.brightness = 0.85
+            self._paint(va.major_gridlines.format.line.color, ("tx1", 0.85))
             va.major_gridlines.format.line.width = Pt(0.75)
             va.format.line.fill.background()
             va.tick_labels.font.size = Pt(fs)
@@ -1583,8 +1752,7 @@ class DeckBuilder:
                 va.tick_labels.number_format_is_linked = False
             ca = chart.category_axis
             ca.tick_labels.font.size = Pt(fs)
-            ca.format.line.color.theme_color = MSO_THEME_COLOR.TEXT_1
-            ca.format.line.color.brightness = 0.6
+            self._paint(ca.format.line.color, ("tx1", 0.6))
             ca.has_major_gridlines = False
             for axis, key in ((va, "y_title"), (ca, "x_title")):
                 if c.get(key):
@@ -1609,8 +1777,32 @@ class DeckBuilder:
             elif ctype.startswith("line"):
                 dl.position = XL_LABEL_POSITION.ABOVE
         theme_font(chart._chartSpace)
+        self._transparent_chart(chart)
         self._animate(it, gf, "graphic")
         self._caption(slide, it, c, b, b.y + b.h - cap, scale)
+
+    @staticmethod
+    def _transparent_chart(chart):
+        """No chart or plot-area fill: the slide background (light, dark or textured) shows through."""
+        cs = chart._chartSpace
+        nofill = (f'<c:spPr xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" {NSDECL}>'
+                  f'<a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>')
+        c_chart = cs.find(qn("c:chart"))
+        old = cs.find(qn("c:spPr"))
+        if old is not None:
+            cs.remove(old)
+        c_chart.addnext(parse_xml(nofill))
+        pa = c_chart.find(qn("c:plotArea"))
+        if pa is not None:
+            old = pa.find(qn("c:spPr"))
+            if old is not None:
+                pa.remove(old)
+            ext = pa.find(qn("c:extLst"))
+            el = parse_xml(nofill)
+            if ext is not None:
+                ext.addprevious(el)
+            else:
+                pa.append(el)
 
     # ---- tables -------------------------------------------------------------------------
     def _table_geometry(self, t, w, scale):
@@ -1739,9 +1931,7 @@ class DeckBuilder:
             sf = etree.SubElement(tcPr, qn("a:solidFill"))
             sc = etree.SubElement(sf, qn("a:schemeClr"))
             sc.set("val", fill[0])
-            if fill[1]:
-                etree.SubElement(sc, qn("a:lumMod")).set("val", str(int((1 - fill[1]) * 100000)))
-                etree.SubElement(sc, qn("a:lumOff")).set("val", str(int(fill[1] * 100000)))
+            self._soft_mods(sc, fill[1])
         else:
             etree.SubElement(tcPr, qn("a:noFill"))
 
@@ -1794,11 +1984,10 @@ class DeckBuilder:
         x, y, w, h = self._figure_box(ph, ratio, b)
         shp = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, inch(x), inch(y), inch(w), inch(h))
         drop_style(shp)
-        fill_theme(shp.fill, "tx1", 0.93)
+        self._fill(shp.fill, "tx1", 0.93)
         shp.line.width = Pt(1.25)
         shp.line.dash_style = MSO_LINE.DASH
-        shp.line.color.theme_color = THEME["tx1"]
-        shp.line.color.brightness = 0.55
+        self._paint(shp.line.color, ("tx1", 0.55))
         label = str(ph.get("label") or "Figure")
         shp.name = f"Placeholder: {strip_markup(label)[:40]}"
         shp._element.nvSpPr.cNvPr.set("descr", str(ph.get("alt") or f"Placeholder - {strip_markup(label)}"))
@@ -1828,7 +2017,8 @@ class DeckBuilder:
         x, y, w, h = self._figure_box({"width": 1.0, **p}, ratio, b)
         colors, fonts = self._theme()
         vector = bool(p.get("vector", True)) and not self.check_only
-        out = plots.render(p, colors, fonts["minor"], w, h, round(self.level_sizes[0] * 0.66 * scale, 1), vector)
+        out = plots.render(p, colors, fonts["minor"], w, h, round(self.level_sizes[0] * 0.66 * scale, 1), vector,
+                           allow_python=self.allow_python, base_dir=self.base_dir)
         png, svg = out if vector else (out, None)
         pic = self._picture(slide, (x, y, w, h), png, svg)
         label = p.get("title") or p.get("ylabel") or p.get("type")
@@ -1913,7 +2103,7 @@ class DeckBuilder:
             self._check("stats entry", e, {"value", "label", "color"})
             if e.get("value") is None:
                 raise ValueError("each stats entry needs a value, e.g. {value: '95%', label: accuracy}")
-        cw = (w - STAT_GAP * (len(entries) - 1)) / len(entries)
+        cw = min((w - STAT_GAP * (len(entries) - 1)) / len(entries), STAT_MAX_W)  # few numbers stay together
         vs = round(float(it["stats"].get("size") or self.level_sizes[0] * 1.8) * scale, 1)
         ls = round(self.level_sizes[0] * 0.8 * scale, 1)
         lines = max([est_lines(str(e["label"]), cw - 0.1, ls, self.cw) for e in entries if e.get("label")] or [0])
@@ -1923,9 +2113,10 @@ class DeckBuilder:
         entries, cw, vs, ls, h = self._stats_geometry(it, b.w, scale)
         color = it["stats"].get("color", "structure")
         y = b.y + max(0.0, (b.h - h) / 2)
+        x0 = b.x + (b.w - cw * len(entries) - STAT_GAP * (len(entries) - 1)) / 2  # the row is centred
         shapes = []
         for i, e in enumerate(entries):
-            tb = slide.shapes.add_textbox(inch(b.x + i * (cw + STAT_GAP)), inch(y), inch(cw), inch(h))
+            tb = slide.shapes.add_textbox(inch(x0 + i * (cw + STAT_GAP)), inch(y), inch(cw), inch(h))
             tf = tb.text_frame
             self._prep_tf(tf)
             self._fill_text(tf, str(e["value"]), size=vs, style={"color": e.get("color", color), "bold": True},
@@ -1949,6 +2140,378 @@ class DeckBuilder:
             self._animate(it, grp, "group")
         else:
             self._animate(it, shapes[0], "sp_text")
+
+    # ---- long content: continued on more slides (overflow: split) ---------------------------
+    def _split_frame(self, spec):
+        """[spec], or one spec per slide when `overflow: split` is set and the content - one bullet list or
+        one table - does not fit on one slide (it would shrink below 90%)."""
+        mode = str(spec.get("overflow", self.meta.get("overflow", "shrink"))).lower()
+        if mode != "split":
+            return [spec]
+        items = self._prepare(spec.get("content"))
+        if len(items) != 1 or items[0][0] not in ("bullets", "numbered", "table"):
+            if str(spec.get("overflow", "")).lower() == "split" and items:
+                self.warn("overflow: split works when the content is one bullets/numbered list or one table "
+                          "- shrunk to fit instead")
+            return [spec]
+        kind, it = items[0]
+        box, opts = self.area, {k: v for k, v in it.items() if k != kind}
+        if kind == "table":
+            t = it["table"]
+            _, _, width, colw, heights = self._table_geometry(t, box.w, 1.0)
+            head = 1 if t.get("header") else 0
+            cap = 0.4 if t.get("caption") else 0
+            if sum(heights) * 0.9 + cap <= box.h:
+                return [spec]
+            pages = paginate(heights[head:], box.h - sum(heights[:head]) - cap - 0.05)
+            rows = list(t.get("rows") or [])
+            contents = []
+            for k, page in enumerate(pages):
+                tk = {**t, "rows": [rows[i] for i in page], "widths": colw, "width": min(1.0, width / box.w)}
+                if k < len(pages) - 1:
+                    tk.pop("caption", None)  # the caption goes under the last part
+                contents.append({"table": tk, **opts})
+        else:
+            groups = []  # top-level entries, each with its nested sub-list(s)
+            for e in it[kind] or []:
+                if isinstance(e, list) and groups:
+                    groups[-1].append(e)
+                else:
+                    groups.append([e])
+            heights = [self._text_height(flatten_bullets(g), box.w, 1.0, it) - 0.12 for g in groups]
+            if (sum(heights) + 0.12) * 0.9 <= box.h:
+                return [spec]
+            pages = paginate(heights, box.h - 0.17)
+            start, contents = int(it.get("start") or 1), []
+            for page in pages:
+                item = {kind: [e for i in page for e in groups[i]], **opts}
+                if kind == "numbered":
+                    item["start"] = start  # numbering continues on the next slide
+                    start += len(page)
+                contents.append(item)
+        n, title = len(contents), str(spec.get("title", ""))
+        if n == 1:
+            return [spec]
+        return [{**spec, "_part": True, "title": f"{title} ({k}/{n})" if title else "", "content": [c]}
+                for k, c in enumerate(contents, 1)]
+
+    # ---- statement slide, logo ---------------------------------------------------------------
+    def _statement_slide(self, spec):
+        """One big centred message (a takeaway or a question); its size is chosen to fill the slide."""
+        text = spec.get("text") if spec.get("text") not in (None, "") else spec.get("title")
+        if text in (None, ""):
+            raise ValueError("statement needs text, e.g.  - layout: statement  then  text: Our main message")
+        kicker = spec.get("title") if spec.get("text") not in (None, "") else None
+        slide = self.prs.slides.add_slide(self.layouts["plain"])
+        self._remove_empty_placeholders(slide, keep=set())
+        lv = self.level_sizes[0]
+        w = min(self.W - 1.8, 10.5)
+        box = Box((self.W - w) / 2, 0.6, w, self.H - 1.2)
+        size, lines = lv * 1.1, 0
+        for k in (2.6, 2.3, 2.0, 1.8, 1.6, 1.4, 1.25, 1.1):  # largest size that keeps it to three lines
+            lines = est_lines(str(text), w - 0.1, lv * k, self.cw_head)
+            if lines <= 3 and lines * lv * k * 1.2 / 72 <= box.h * 0.6:
+                size = lv * k
+                break
+        if 1 < lines <= 3 and "\n" not in str(text):  # balanced lines, not one word left on its own
+            narrow = len(strip_markup(str(text))) * size * self.cw_head / 72 / lines * 1.12 + 0.3
+            if narrow < w and est_lines(str(text), narrow - 0.1, size, self.cw_head) <= lines:
+                box = Box((self.W - narrow) / 2, box.y, narrow, box.h)
+        items = []
+        if kicker:
+            items.append(("text", {"text": str(kicker), "size": round(lv * 0.85), "align": "center",
+                                   "color": "structure", "bold": True}))
+        items.append(("text", {"text": str(text), "size": round(size), "align": "center", "_font": "+mj-lt"}))
+        if spec.get("subtitle"):
+            items.append(("text", {"text": str(spec["subtitle"]), "size": round(lv * 0.95), "align": "center",
+                                   "color": "muted"}))
+        self._render_items(slide, items, box, "center", top=True)
+        return slide
+
+    def _logo_spec(self, v):
+        """meta.logo -> {media, pos, w, h} (normal size) or None."""
+        if not v:
+            return None
+        if isinstance(v, str):
+            v = {"path": v}
+        if not isinstance(v, dict):
+            raise SystemExit("error: meta.logo must be a file path or {path, dark, position, height}")
+        self._check("logo", v, {"path", "dark", "position", "height"})
+        path = v.get("dark") if self.dark and v.get("dark") else v.get("path")
+        if not path:
+            raise SystemExit("error: meta.logo needs a path, e.g. logo: assets/logo.svg")
+        pos = str(v.get("position", "top-right")).lower()
+        if pos not in ("top-right", "top-left", "bottom-right", "bottom-left"):
+            raise SystemExit(f"error: meta.logo position must be top-right, top-left, bottom-right or bottom-left, "
+                             f"got {pos!r}")
+        try:
+            m = self._media({"path": path})
+            h = float(v.get("height", 0.45))
+        except (ValueError, TypeError) as exc:
+            raise SystemExit(f"error: meta.logo: {exc}") from None
+        w = min(h * m.ratio, 2.2)
+        return {"media": m, "pos": pos, "w": w, "h": w / m.ratio}
+
+    def _place_logo(self, slide, big=False):
+        """The logo in its corner (on a frame: centred on the title band); a title it would cover is
+        narrowed to end before it."""
+        lg = self.logo
+        if not lg:
+            return
+        k = 1.5 if big else 1.0
+        w, h, pos, mg = lg["w"] * k, lg["h"] * k, lg["pos"], 0.25
+        x = self.W - mg - w if pos.endswith("right") else mg
+        title = slide.shapes.title
+        band = title is not None and to_in(title.top) + to_in(title.height) <= self.area.y + 0.05  # a frame title
+        if pos.startswith("top"):
+            y = mg
+            if band and not big and to_in(title.height) >= h:
+                y = to_in(title.top) + (to_in(title.height) - h) / 2
+        else:
+            y = self.H - mg - h - 0.3  # above a footline
+        if title is not None and pos.startswith("top"):
+            tx, ty, tw, th = (to_in(v) for v in (title.left, title.top, title.width, title.height))
+            if ty < y + h and y < ty + th and tx < x + w and x < tx + tw:
+                if pos.endswith("right"):
+                    tw = x - 0.15 - tx
+                else:
+                    tw, tx = tx + tw - (x + w + 0.15), x + w + 0.15
+                if tw > 2:  # all four, or an inherited position would be lost
+                    title.left, title.top, title.width, title.height = inch(tx), inch(ty), inch(tw), inch(th)
+        pic = self._add_figure(slide, lg["media"], (x, y, w, h))
+        pic.name = "Logo"
+
+    def _logo_reserve(self, slide) -> float:
+        """Width (in) the logo takes from a frame title on this slide."""
+        lg = self.logo
+        if not lg or not lg["pos"].startswith("top"):
+            return 0.0
+        return lg["w"] + 0.4
+
+    # ---- quote, timeline, cards ----------------------------------------------------------------
+    def _quote_geometry(self, it, w, scale):
+        q = it["quote"]
+        if q.get("text") in (None, ""):
+            raise ValueError("quote needs text, e.g. quote: {text: '...', by: Author}")
+        size = round(float(q.get("size") or self.level_sizes[0] * 1.1) * scale, 1)
+        by = round(self.level_sizes[0] * 0.8 * scale, 1)
+        text = str(q["text"]).strip()
+        if not text.startswith(("\u201c", '"', "\u00ab")):
+            text = f"\u201c{text}\u201d"
+        h = est_lines(text, w - 0.45, size, self.cw) * size * 1.25 / 72 + 0.12
+        if q.get("by"):
+            h += by * 1.3 / 72 + 0.1
+        return text, size, by, h
+
+    def _render_quote(self, slide, it, b, scale):
+        q = it["quote"]
+        text, size, by, h = self._quote_geometry(it, b.w, scale)
+        y = b.y + max(0.0, (b.h - h) / 2)
+        bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, inch(b.x), inch(y), inch(0.07), inch(h))
+        drop_style(bar)
+        self._fill(bar.fill, q.get("color", "structure"))
+        bar.line.fill.background()
+        bar.name = "Quote Bar"
+        tb = slide.shapes.add_textbox(inch(b.x + 0.3), inch(y), inch(b.w - 0.3), inch(h))
+        self._prep_tf(tb.text_frame)
+        self._fill_text(tb.text_frame, text, size=size, style={"italic": True})
+        if q.get("by"):
+            p = tb.text_frame.add_paragraph()
+            set_bullet(p, "none")
+            p.space_before = Pt(round(by * 0.4, 1))
+            self._add_runs(p, f"\u2014 {q['by']}", {"size": by, "color": "muted"})
+        tb.name = f"Quote: {strip_markup(text)[:40]}"
+        grp = slide.shapes.add_group_shape([bar, tb])
+        grp.name = "Quote"
+        self._animate(it, grp, "group")
+
+    @staticmethod
+    def _entries(it, kind, keys, first):
+        """Entries of a timeline / cards list as dicts; a bare string -> {first: string}."""
+        raw = it[kind].get("items")
+        if not isinstance(raw, list) or not raw:
+            raise ValueError(f"{kind} needs a list, e.g. {kind}: {EXAMPLES[kind]}")
+        out = []
+        for e in raw:
+            if isinstance(e, dict) and len(e) == 1 and next(iter(e)) not in keys:  # - 2019: Founded
+                (k, v), = e.items()
+                e = {"date": k, "text": v} if kind == "timeline" else {"title": k, "text": v}
+            elif not isinstance(e, dict):
+                e = str(e)
+                if kind == "timeline" and ": " in e:
+                    d, t = e.split(": ", 1)
+                    e = {"date": d, "text": t}
+                else:
+                    e = {first: e}
+            out.append(e)
+        return out
+
+    def _timeline_geometry(self, it, w, scale):
+        entries = self._entries(it, "timeline", {"date", "text", "color"}, "text")
+        for e in entries:
+            self._check("timeline entry", e, {"date", "text", "color"})
+        n, lv = len(entries), self.level_sizes[0]
+        size = float(it["timeline"].get("size") or lv * 0.72) * scale
+        ds = round(size * 1.12, 1)
+        slot = w / n
+        dh = max([est_lines(str(e["date"]), slot - 0.1, ds, self.cw) for e in entries if e.get("date") is not None]
+                 or [0]) * ds * 1.2 / 72
+        th = max([est_lines(str(e["text"]), slot - 0.15, size, self.cw) for e in entries if e.get("text")]
+                 or [0]) * size * 1.2 / 72
+        dot = max(0.16, min(0.26, size / 72 * 1.1))
+        return entries, slot, round(size, 1), ds, dh, th, dot, dh + 0.12 + dot + 0.12 + th + 0.08
+
+    def _render_timeline(self, slide, it, b, scale):
+        tl = it["timeline"]
+        entries, slot, size, ds, dh, th, dot, h = self._timeline_geometry(it, b.w, scale)
+        y = b.y + max(0.0, (b.h - h) / 2)
+        line_y = y + dh + 0.12 + dot / 2
+        hl = tl.get("highlight")
+        hl = set(hl if isinstance(hl, list) else [hl]) if hl is not None else set()
+        base = tl.get("color", "structure")
+        line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, inch(b.x + slot / 2), inch(line_y - 0.02),
+                                      inch(max(0.04, slot * (len(entries) - 1))), inch(0.04))
+        drop_style(line)
+        self._fill(line.fill, base, 0.55)
+        line.line.fill.background()
+        line.name = "Timeline Line"
+        parts = []
+        for i, e in enumerate(entries):
+            cx = b.x + slot * (i + 0.5)
+            color = e.get("color", base)
+            on = (i + 1) in hl
+            dim = bool(hl) and not on
+            d = dot * (1.25 if on else 1.0)
+            shp = slide.shapes.add_shape(MSO_SHAPE.OVAL, inch(cx - d / 2), inch(line_y - d / 2), inch(d), inch(d))
+            drop_style(shp)
+            self._fill(shp.fill, color, 0.55 if dim else 0.0)
+            self._paint(shp.line.color, "bg1")
+            shp.line.width = Pt(1.5)
+            shp.name = f"Timeline Dot {i + 1}"
+            group = [shp]
+            if e.get("date") is not None:
+                tb = slide.shapes.add_textbox(inch(cx - slot / 2 + 0.05), inch(y), inch(slot - 0.1), inch(dh))
+                self._prep_tf(tb.text_frame, anchor=MSO_ANCHOR.BOTTOM)
+                self._fill_text(tb.text_frame, str(e["date"]), size=ds,
+                                style={"color": "muted" if dim else color, "bold": True}, align="center")
+                tb.name = f"Timeline Date: {strip_markup(str(e['date']))[:30]}"
+                group.append(tb)
+            if e.get("text"):
+                tb = slide.shapes.add_textbox(inch(cx - slot / 2 + 0.075), inch(line_y + dot / 2 + 0.12),
+                                              inch(slot - 0.15), inch(th + 0.08))
+                self._prep_tf(tb.text_frame)
+                self._fill_text(tb.text_frame, str(e["text"]), size=size,
+                                style={"color": "muted" if dim else None, "bold": True if on else None},
+                                align="center")
+                tb.name = f"Timeline: {strip_markup(str(e['text']))[:40]}"
+                group.append(tb)
+            parts.append(group)
+        self._finish_row(slide, it, [[line] + parts[0]] + parts[1:], "Timeline")
+
+    def _finish_row(self, slide, it, parts, name):
+        """Animate a row of entries: one per click with `build`, else the whole row as one group."""
+        if it.get("build"):
+            effect = it["build"] if isinstance(it["build"], str) else "fade"
+            for shapes in parts:
+                self.steps.append([[Effect(s.shape_id, effect) for s in shapes]])
+                for s in shapes:
+                    self.builds[s.shape_id] = "shape"
+            self._last_main = parts[0][0]
+            return
+        flat = [s for shapes in parts for s in shapes]
+        grp = slide.shapes.add_group_shape(flat)
+        grp.name = name
+        self._animate(it, grp, "group")
+
+    def _cards_geometry(self, it, w, scale):
+        c = it["cards"]
+        entries = self._entries(it, "cards", {"title", "text", "bullets", "color"}, "title")
+        for e in entries:
+            self._check("cards entry", e, {"title", "text", "bullets", "color"})
+        n = len(entries)
+        cols = c.get("columns")
+        cols = int(cols) if cols else (n if n <= 4 else 3 if n in (5, 6, 9) else 4)
+        cols = max(1, min(cols, n))
+        gap = 0.3
+        cw = (w - gap * (cols - 1)) / cols
+        lv = self.level_sizes[0]
+        ts = round(float(c.get("size") or lv * 0.78) * scale, 1)
+        hs = round(ts * 1.15, 1)
+        heights = []
+        for e in entries:
+            h = 0.12 + 0.07 + 0.1  # accent strip and padding
+            if e.get("title"):
+                h += est_lines(str(e["title"]), cw - 0.3, hs, self.cw * 1.08) * hs * 1.2 / 72 + 0.06
+            if e.get("bullets"):
+                h += self._text_height(flatten_bullets(e["bullets"]), cw - 0.3, 1.0, {"size": ts}) - 0.12
+            elif e.get("text"):
+                h += self._text_height([(0, x) for x in str(e["text"]).split("\n")], cw - 0.3, 1.0, {"size": ts},
+                                       indent=False) - 0.12
+            heights.append(h + 0.1)
+        rows = [max(heights[r * cols:(r + 1) * cols]) for r in range(-(-n // cols))]
+        return entries, cols, cw, gap, ts, hs, rows, sum(rows) + gap * (len(rows) - 1)
+
+    def _render_cards(self, slide, it, b, scale):
+        c = it["cards"]
+        entries, cols, cw, gap, ts, hs, rows, total = self._cards_geometry(it, b.w, scale)
+        style = str(c.get("style", "tinted")).lower()
+        y = b.y + max(0.0, (b.h - total) / 2)
+        parts = []
+        for r, rh in enumerate(rows):
+            row = entries[r * cols:(r + 1) * cols]
+            x = b.x + (b.w - (cw * len(row) + gap * (len(row) - 1))) / 2  # a short last row is centred
+            for e in row:
+                color = e.get("color", c.get("color", "structure"))
+                card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, inch(x), inch(y), inch(cw), inch(rh))
+                drop_style(card)
+                card.adjustments[0] = min(0.5, 0.08 / min(cw, rh))
+                if style == "solid":
+                    self._fill(card.fill, color)
+                    card.line.fill.background()
+                elif style == "outline":
+                    card.fill.background()
+                    card.line.width = Pt(1.25)
+                    self._paint(card.line.color, color)
+                else:
+                    self._fill(card.fill, color, 0.88)
+                    card.line.fill.background()
+                text_color = "white" if style == "solid" else "tx1"
+                tf = card.text_frame
+                tf.word_wrap, tf.auto_size, tf.vertical_anchor = True, MSO_AUTO_SIZE.NONE, MSO_ANCHOR.TOP
+                tf.margin_left = tf.margin_right = inch(0.15)
+                tf.margin_top, tf.margin_bottom = inch(0.22), inch(0.08)
+                copy_body_style(self.prs, tf)
+                tf.clear()
+                first = True
+                if e.get("title"):
+                    p = tf.paragraphs[0]
+                    set_bullet(p, "none")
+                    p.alignment = PP_ALIGN.LEFT
+                    self._add_runs(p, str(e["title"]), {"size": hs, "bold": True, "color": text_color})
+                    first = False
+                body = (flatten_bullets(e["bullets"]) if e.get("bullets") else
+                        [(None, x) for x in str(e.get("text") or "").split("\n")] if e.get("text") else [])
+                for lvl, txt in body:
+                    p = tf.paragraphs[0] if first else tf.add_paragraph()
+                    first = False
+                    p.alignment = PP_ALIGN.LEFT
+                    if lvl is None:
+                        set_bullet(p, "none")
+                    else:
+                        p.level = min(lvl, 8)
+                    p.space_before = Pt(round(ts * 0.35, 1))
+                    self._add_runs(p, txt, {"size": self._sz(lvl or 0, 1.0, {"size": ts}), "color": text_color})
+                card.name = f"Card: {strip_markup(str(e.get('title') or e.get('text') or ''))[:40]}"
+                strip = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, inch(x + 0.15), inch(y + 0.1),
+                                               inch(min(0.9, cw - 0.3)), inch(0.06))
+                drop_style(strip)
+                self._fill(strip.fill, "white" if style == "solid" else color)
+                strip.line.fill.background()
+                strip.name = "Card Accent"
+                parts.append([card, strip])
+                x += cw + gap
+            y += rh + gap
+        self._finish_row(slide, it, parts, "Cards")
 
     # ---- references and closing slides -----------------------------------------------------
     def _references_slides(self, spec):
@@ -1974,20 +2537,7 @@ class DeckBuilder:
         heights = [est_lines(text, box.w - hang - 0.05, size, self.cw) * size * 1.2 / 72 + size * 0.5 / 72
                    for _, text in rows]
 
-        def paginate(cap):
-            pages, used = [[]], 0.0
-            for row, h in zip(rows, heights):
-                if pages[-1] and used + h > cap:
-                    pages.append([])
-                    used = 0.0
-                pages[-1].append(row)
-                used += h
-            return pages
-
-        pages = paginate(box.h)
-        if len(pages) > 1:  # spread the entries evenly instead of leaving a short last slide
-            even = paginate(max(sum(heights) / len(pages) * 1.05, max(heights)))
-            pages = even if len(even) == len(pages) else pages
+        pages = [[rows[i] for i in page] for page in paginate(heights, box.h)]
         title, slides = str(spec.get("title", "References")), []
         for k, page in enumerate(pages, 1):
             slide = self.prs.slides.add_slide(self.layouts["title_only"])
@@ -2042,7 +2592,7 @@ class DeckBuilder:
         if hit and hit[0] is it:
             return hit[1], hit[2]
         spec = it[kind]  # a mapping: _prepare_item merged a steps list and its settings into one
-        lay = flows.layout(kind, spec, strip_markup)
+        lay = flows.layout(kind, spec, strip_markup, self.cw / CHAR_W["calibri"])
         self._flow_cache[id(it)] = (it, lay, spec)
         return lay, spec
 
@@ -2074,12 +2624,12 @@ class DeckBuilder:
             neutral = g.color in ("tx1", "text")
             if g.fill:
                 shp.fill.solid()
-                paint(shp.fill.fore_color, g.color, 0.94)
+                self._paint(shp.fill.fore_color, g.color, 0.94)
             else:
                 shp.fill.background()
             shp.line.width = Pt(1)
             shp.line.dash_style = MSO_LINE.DASH
-            paint(shp.line.color, g.color, 0.45 if neutral else 0.0)
+            self._paint(shp.line.color, g.color, 0.45 if neutral else 0.0)
             tf = shp.text_frame
             tf.word_wrap, tf.auto_size, tf.vertical_anchor = True, MSO_AUTO_SIZE.NONE, MSO_ANCHOR.TOP
             tf.margin_left = tf.margin_right = L(flows.GPAD * 0.6)
@@ -2103,11 +2653,11 @@ class DeckBuilder:
             else:
                 shp.fill.solid()
                 if n.style == "outline":
-                    paint(shp.fill.fore_color, "bg1")
+                    self._paint(shp.fill.fore_color, "bg1")
                 else:
-                    paint(shp.fill.fore_color, n.color, 0.85 if n.style == "tinted" else 0.0)
+                    self._paint(shp.fill.fore_color, n.color, 0.85 if n.style == "tinted" else 0.0)
                 shp.line.width = line_w
-                paint(shp.line.color, n.color)
+                self._paint(shp.line.color, n.color)
             tf = shp.text_frame
             tf.word_wrap, tf.auto_size, tf.vertical_anchor = True, MSO_AUTO_SIZE.NONE, MSO_ANCHOR.MIDDLE
             tf.margin_left = tf.margin_right = L(n.pad[0])
@@ -2154,7 +2704,7 @@ class DeckBuilder:
                 c.set("id", str(by_id[nid].shape_id))
                 c.set("idx", str(idx))
             cx.line.width = Pt(e.width or float(spec.get("line_width", 1.25)))
-            paint(cx.line.color, e.color or line_color)
+            self._paint(cx.line.color, e.color or line_color)
             if e.dash != "solid":
                 cx.line.dash_style = MSO_LINE.DASH if e.dash == "dashed" else MSO_LINE.ROUND_DOT
             ln = el.spPr.find(qn("a:ln"))
@@ -2197,16 +2747,54 @@ class DeckBuilder:
         self._caption(slide, it, spec, b, y0 + lay.h * em, scale)
 
     def _theme(self):
-        """Theme colours {dk1: 'RRGGBB', accent1: ...} and fonts {major, minor} of the template."""
+        """Theme colours and fonts of the template: ({dk1: 'RRGGBB', ..., accent1: ..., tx1: ..., bg1: ...},
+        {major, minor}). tx1/bg1/tx2/bg2 follow the master's colour map, so a dark template (bg1 = dk1)
+        gives its real text and background colours."""
         if getattr(self, "_theme_cache", None) is None:
             root = etree.fromstring(self.prs.slide_master.part.part_related_by(RT.THEME).blob)
             colors = {}
-            for el in root.find(f".//{qn('a:clrScheme')}"):
-                c = el[0]
-                colors[etree.QName(el).localname] = c.get("val") if c.tag == qn("a:srgbClr") else c.get("lastClr")
-            fonts = {k: root.find(f".//{qn(f'a:{k}Font')}/{qn('a:latin')}").get("typeface") for k in ("major", "minor")}
-            self._theme_cache = ({k: v for k, v in colors.items() if v}, fonts)
+            scheme = root.find(f".//{qn('a:clrScheme')}")
+            for el in (scheme if scheme is not None else []):
+                c = el[0] if len(el) else None
+                if c is not None:
+                    colors[etree.QName(el).localname] = c.get("val") if c.tag == qn("a:srgbClr") else c.get("lastClr")
+            fonts = {}
+            for k in ("major", "minor"):
+                latin = root.find(f".//{qn(f'a:{k}Font')}/{qn('a:latin')}")
+                fonts[k] = latin.get("typeface") if latin is not None and latin.get("typeface") else "Calibri"
+            cmap = self.prs.slide_master._element.find(qn("p:clrMap"))
+            default = {"bg1": "lt1", "tx1": "dk1", "bg2": "lt2", "tx2": "dk2"}
+            for role, slot in default.items():
+                slot = cmap.get(role, slot) if cmap is not None else slot
+                if colors.get(slot):
+                    colors[role] = colors[slot]
+            colors = {k: str(v).upper() for k, v in colors.items() if v}
+            colors.setdefault("tx1", "000000")
+            colors.setdefault("bg1", "FFFFFF")
+            self._theme_cache = (colors, fonts)
         return self._theme_cache
+
+    # ---- colours (theme-linked; tints move towards the background, so dark templates work) ---------
+    def _paint(self, color_format, spec, tint: float = 0.0) -> None:
+        paint(color_format, spec, tint, self.dark)
+
+    def _fill(self, fill, spec, tint: float = 0.0) -> None:
+        fill.solid()
+        paint(fill.fore_color, spec, tint, self.dark)
+
+    def _font_color(self, font, spec) -> None:
+        if spec is not None:
+            paint(font.color, spec, 0.0, self.dark)
+
+    def _soft_mods(self, scheme_el, soft: float) -> None:
+        """lumMod/lumOff children of an <a:schemeClr> that move it `soft` towards the background."""
+        if not soft:
+            return
+        if self.dark:  # towards black
+            etree.SubElement(scheme_el, qn("a:lumMod")).set("val", str(int((1 - soft) * 100000)))
+        else:          # towards white
+            etree.SubElement(scheme_el, qn("a:lumMod")).set("val", str(int((1 - soft) * 100000)))
+            etree.SubElement(scheme_el, qn("a:lumOff")).set("val", str(int(soft * 100000)))
 
     @staticmethod
     def _figure_box(spec, ratio, b):
@@ -2389,11 +2977,12 @@ def load_content(path: str) -> dict:
     return content
 
 
-def _build(content_path, output=None, template=None, keep_template_slides=False, check=False):
+def _build(content_path, output=None, template=None, keep_template_slides=False, check=False, allow_python=False):
     """-> (builder, presentation, output path or None when only checking)."""
     content = load_content(content_path)
     base = os.path.dirname(os.path.abspath(content_path))
-    builder = DeckBuilder(content, template, base, keep_template_slides=keep_template_slides, check_only=check)
+    builder = DeckBuilder(content, template, base, keep_template_slides=keep_template_slides, check_only=check,
+                          allow_python=allow_python)
     prs = builder.build()
     if check:
         return builder, prs, None
@@ -2408,16 +2997,81 @@ def _build(content_path, output=None, template=None, keep_template_slides=False,
 
 
 def build_deck(content_path: str, output: str | None = None, template: str | None = None,
-               keep_template_slides: bool = False, check: bool = False) -> str | None:
-    """Build a deck; returns the output path (None with check=True). Warnings are printed to stderr."""
-    return _build(content_path, output, template, keep_template_slides, check)[2]
+               keep_template_slides: bool = False, check: bool = False, allow_python: bool = False) -> str | None:
+    """Build a deck; returns the output path (None with check=True). Warnings are printed to stderr.
+    allow_python: run the code of `plot: {type: python}` items (only for YAML you trust)."""
+    return _build(content_path, output, template, keep_template_slides, check, allow_python)[2]
+
+
+STARTER = """\
+# {name} - made with `python ppt_templated.py --new`. Reference: YAML_GUIDE.md (agents: AGENTS.md).
+# Build:  python ppt_templated.py {name} --preview
+meta:
+  title: Talk Title
+  subtitle: One line on what this is about
+  author: Your Name
+  institute: Your Institute
+  date: today
+  # python ppt_templated.py --templates lists the templates (light and dark)
+  template: {template}
+  # long bullet lists and tables continue on more slides instead of shrinking
+  overflow: split
+
+slides:
+  - layout: title
+
+  - layout: section
+    title: Motivation
+
+  - title: The problem in one sentence
+    content:
+      - bullets:
+          - First point
+          - - a detail of the first point
+          - Second point
+        build: true
+
+  - title: Our approach
+    content:
+      - columns:
+          - - placeholder: {{label: Method diagram, note: "draw this later", aspect: "4:3"}}
+          - - bullets: [Step one, Step two, Step three]
+
+  - title: Results
+    content:
+      - stats:
+          - {{value: "+4.2", label: accuracy points}}
+          - {{value: "3x", label: faster}}
+      - table:
+          header: [Model, Accuracy]
+          rows: [[Baseline, "81.2%"], ["**Ours**", "==85.4%=="]]
+
+  - layout: statement
+    text: The one thing to remember
+
+  - layout: references
+    items: ['A. Author, "A paper," *Venue*, 2024.']
+
+  - layout: closing
+"""
+
+
+def new_content_file(path: str, template: str | None = None) -> str:
+    """Write a starter content file (refuses to overwrite)."""
+    if os.path.exists(path):
+        raise SystemExit(f"error: {path} already exists - choose another name")
+    if template:
+        find_template(template, os.path.dirname(os.path.abspath(path)), from_cli=True)  # fails early
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(STARTER.format(name=os.path.basename(path), template=template or "oxford"))
+    return path
 
 
 def inspect_template(template: str | None = None, base_dir: str = ".", layouts: dict | None = None) -> str:
     """What a template gives ppt_templated: layouts, content area, fonts, text sizes, colours, tokens."""
     b = DeckBuilder({"meta": {"layouts": layouts or {}}}, template, base_dir)
     colors, fonts = b._theme()
-    roles = {"dk1": "text", "lt1": "background", "accent1": "structure", "accent2": "alert", "accent3": "example"}
+    roles = {"tx1": "text", "bg1": "background", "accent1": "structure", "accent2": "alert", "accent3": "example"}
     a, lv = b.area, b.level_sizes[0]
     texts = [sh.text_frame.text for c in [b.prs.slide_master, *b.prs.slide_layouts]
              for sh in iter_shapes_deep(c.shapes) if sh.has_text_frame and not sh.is_placeholder]
@@ -2428,6 +3082,7 @@ def inspect_template(template: str | None = None, base_dir: str = ".", layouts: 
         "layouts       " + ", ".join(f"{k} = {lay.name!r}" for k, lay in b.layouts.items()),
         "title slide   placeholders: " + ", ".join(ph.name for ph in b.layouts["title"].placeholders),
         f"content area  x {a.x:.2f}  y {a.y:.2f}  w {a.w:.2f}  h {a.h:.2f} in (every frame's content goes here)",
+        f"mode          {'dark (light text on a dark background)' if b.dark else 'light'}",
         f"fonts         headings {fonts['major']}, body {fonts['minor']}",
         f"text sizes    frame title {b.title_size:g} pt; body levels "
         + " / ".join(f"{s:g}" for s in b.level_sizes) + " pt",
@@ -2441,16 +3096,24 @@ def inspect_template(template: str | None = None, base_dir: str = ".", layouts: 
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Build an editable Beamer-style .pptx from a YAML content file (reference: YAML_GUIDE.md).",
-        epilog="examples:\n  python ppt_templated.py talk.yaml --preview\n  python ppt_templated.py talk.yaml --check"
+        epilog="examples:\n  python ppt_templated.py talk.yaml --preview\n  python ppt_templated.py talk.yaml --check --json"
+               "\n  python ppt_templated.py --templates\n  python ppt_templated.py --new talk.yaml -t midnight"
                "\n  python ppt_templated.py --inspect templates/beamer_paper.pptx",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("content", nargs="?", help="YAML content file")
     ap.add_argument("-o", "--output", help="output .pptx (default: meta.output, else next to the YAML)")
-    ap.add_argument("-t", "--template", help="template .pptx/.potx (default: meta.template or templates/beamer_oxford.pptx)")
+    ap.add_argument("-t", "--template", help="template: a bundled name (oxford, midnight, ...) or a .pptx/.potx path "
+                                             "(default: meta.template, else oxford)")
     ap.add_argument("--check", action="store_true", help="validate and lay out only; write nothing")
     ap.add_argument("--preview", nargs="?", const="", metavar="DIR",
                     help="also render slide PNGs and 6-slide contact sheets (default: .preview/<deck>/ beside the deck)")
     ap.add_argument("--strict", action="store_true", help="exit with status 1 if there were warnings")
+    ap.add_argument("--json", action="store_true",
+                    help="print a JSON report (warnings per slide, how full each slide is) to stdout")
+    ap.add_argument("--allow-python", action="store_true",
+                    help="run the code of `plot: {type: python}` items (only for YAML you trust)")
+    ap.add_argument("--templates", action="store_true", help="list the bundled templates and exit")
+    ap.add_argument("--new", action="store_true", help="write a starter content file to CONTENT and exit")
     ap.add_argument("--inspect", nargs="?", const="", metavar="TEMPLATE",
                     help="describe a template (default: the YAML's or the default template) and exit")
     ap.add_argument("--keep-template-slides", action="store_true", help="keep slides already in the template")
@@ -2465,30 +3128,69 @@ def main(argv=None):
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
+    if a.templates:
+        rows = describe_templates()
+        if a.json:
+            print(json.dumps([{"name": n, "mode": m, "description": d} for n, m, d in rows], indent=2))
+        else:
+            for n, m, d in rows:
+                print(f"{n:<11} {m:<5}  {d}")
+        return
+    if a.new:
+        if not a.content:
+            ap.error("--new needs the file to write, e.g. --new talk.yaml")
+        print("wrote", new_content_file(a.content, a.template))
+        return
     if a.inspect is not None:
         meta = (load_content(a.content).get("meta") or {}) if a.content else {}
         base = os.path.dirname(os.path.abspath(a.content)) if a.content else os.getcwd()
         print(inspect_template(a.inspect or a.template or meta.get("template"), base, meta.get("layouts")))
         return
     if not a.content:
-        ap.error("give a YAML content file (or --inspect TEMPLATE)")
-    builder, prs, out = _build(a.content, a.output, a.template, a.keep_template_slides, a.check)
+        ap.error("give a YAML content file (or --templates, --new FILE, --inspect TEMPLATE)")
+    if a.json:
+        try:
+            _main_build(a, report=True)
+        except SystemExit as exc:
+            if isinstance(exc.code, str):  # an error message: report it as JSON too
+                print(exc.code, file=sys.stderr)
+                print(json.dumps({"ok": False, "error": exc.code.removeprefix("error: ")}, indent=2))
+                sys.exit(1)
+            raise
+    else:
+        _main_build(a)
+
+
+def _main_build(a, report=False):
+    builder, prs, out = _build(a.content, a.output, a.template, a.keep_template_slides, a.check, a.allow_python)
+    slides = sheets = engine = None
     if a.preview is not None and out:
         import preview
-        try:  # PowerPoint also measures the rendered layout: real overlaps become warnings too
+        try:  # the rendered layout is measured too: real overlaps become warnings
+            frames = {i["slide"] for i in builder.slide_info if i["layout"] in ("frame", "outline", "references")}
             slides, sheets, engine, problems = preview.preview(out, a.preview or None,
-                                                               bottom=builder.area.y + builder.area.h)
+                                                               bottom=builder.area.y + builder.area.h, frames=frames)
             for p in problems:
-                builder.warn(f"{p} (measured)")
+                m = re.match(r"slide (\d+): (.*)", p)
+                if m:
+                    builder.warn(f"{m.group(2)} (measured)", slide=int(m.group(1)))
+                else:
+                    builder.warn(f"{p} (measured)")
         except RuntimeError as exc:
-            slides = None
             warn(f"no preview - {exc}")
     n = len(builder.warnings)
     summary = f"{len(prs.slides)} slides, {n} warning{'' if n == 1 else 's'}"
-    print(f"checked {a.content} ({summary})" if a.check else f"wrote {out} ({summary})")
-    if a.preview is not None and out and slides:
-        print(f"preview ({engine}): {len(slides)} slide images in {os.path.dirname(slides[0])}")
-        print("  contact sheets: " + "  ".join(sheets))
+    say = (lambda *x: print(*x, file=sys.stderr)) if report else print  # with --json only JSON goes to stdout
+    say(f"checked {a.content} ({summary})" if a.check else f"wrote {out} ({summary})")
+    if slides:
+        say(f"preview ({engine}): {len(slides)} slide images in {os.path.dirname(slides[0])}")
+        say("  contact sheets: " + "  ".join(sheets))
+    if report:
+        print(json.dumps({
+            "ok": True, "output": out, "template": builder.template_path, "dark": builder.dark,
+            "slides": len(prs.slides), "warnings": builder.problems, "slide_info": builder.slide_info,
+            "preview": {"renderer": engine, "sheets": sheets, "images": slides} if slides else None,
+        }, indent=2, ensure_ascii=False))
     if a.strict and n:
         sys.exit(1)
 
