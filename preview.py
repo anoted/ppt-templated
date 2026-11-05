@@ -155,14 +155,40 @@ def _boxes(pptx):
             for sh, _ in walk(src.shapes):
                 if not sh.is_placeholder and sh.has_text_frame and sh.text_frame.text.strip():
                     zones.append(box(sh))
-        filled = []
+        filled, texts = [], []
         for sh, group in walk(slide.shapes):
             if (sh.has_text_frame and sh.shape_type == 1 and sh.text_frame.text.strip()
                     and sh.fill.type is not None and sh.width and sh.height):  # an autoshape with a fill
                 generic = re.match(r"(Rounded Rectangle|Rectangle|TextBox|Oval|Freeform) \d+$", sh.name)
                 filled.append((box(sh), (group or sh.text_frame.text) if generic else sh.name))
-        out.append((zones, filled))
+            if sh.has_text_frame and sh.text_frame.text.strip():
+                texts.append((box(sh), _letters(sh.text_frame.text)))
+            elif getattr(sh, "has_table", False):
+                texts.append((box(sh), _letters(" ".join(c.text for r in sh.table.rows for c in r.cells))))
+        out.append((zones, filled, texts))
     return out, Emu(prs.slide_width).inches
+
+
+def _letters(s: str) -> str:
+    """Letters and digits only: how a rendered line is matched to the shape it came from."""
+    return re.sub(r"[\W_]+", "", str(s)).lower()
+
+
+def _owner(text, b, texts):
+    """Index of the slide shape a rendered line belongs to (its text holds the line; the nearest such
+    shape), or None."""
+    key = _letters(text)
+    if len(key) < 2:
+        return None
+    best, dist = None, None
+    for i, (bx, t) in enumerate(texts):
+        if key not in t:
+            continue
+        cx = (b[0] + b[2]) / 2
+        d = max(0.0, bx[0] - cx, cx - bx[2]) + max(0.0, bx[1] - b[1], b[1] - bx[3])
+        if dist is None or d < dist:
+            best, dist = i, d
+    return best
 
 
 def pdf_problems(doc, pptx, bottom=None, frames=None):
@@ -180,7 +206,7 @@ def pdf_problems(doc, pptx, bottom=None, frames=None):
     for n, page in enumerate(doc, 1):
         if n > len(per_slide):
             break
-        zones, filled = per_slide[n - 1]
+        zones, filled, texts = per_slide[n - 1]
         k = slide_w / page.rect.width  # inches per PDF point
         lines = []
         for bi, blk in enumerate(page.get_text("dict").get("blocks", [])):
@@ -192,7 +218,8 @@ def pdf_problems(doc, pptx, bottom=None, frames=None):
                 c = ((x0 + x1) / 2, (y0 + y1) / 2)
                 if any(inside(c, z) for z in zones):
                     continue  # footline, slide number, decorations of the template
-                lines.append((bi, text, (x0, y0, x1, y1)))
+                owner = _owner(text, (x0, y0, x1, y1), texts)  # PDF blocks can merge text of two shapes
+                lines.append((("shape", owner) if owner is not None else ("block", bi), text, (x0, y0, x1, y1)))
         found = set()
         if bottom and (frames is None or n in frames):
             worst = max(((ln[2][3] - bottom, ln) for ln in lines), default=(0, None), key=lambda t: t[0])
