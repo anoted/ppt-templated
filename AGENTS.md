@@ -24,7 +24,7 @@ and fix any `(measured)` warning. With `--json`, stdout is one JSON object (huma
                  "fill": 0.97, "text_scale": 0.8, "animation_steps": 0}]}
 ```
 
-| Signal | Meaning | Do |
+| What you see | Meaning | Do |
 |---|---|---|
 | `"ok": false` + `error` | The build stopped (bad YAML, unknown template, missing file) | Fix what the message names |
 | a `warnings` entry | A problem on that slide; the message says what to change | Fix it; never ignore |

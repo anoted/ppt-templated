@@ -528,7 +528,7 @@ else 4.
 
 CSV delimiters (`,` `;` tab `|`) are detected. JSON: a list of records, a list of rows (first =
 header) or `{header, rows}`. Numbers may use thousands separators (`1,234.5`) or end in `%`; empty
-cells are gaps. A column name that does not exist is reported with the closest match.
+cells are left out (a break in a line plot). A column name that does not exist is reported with the closest match.
 
 ## 7. Figures: images, SVG, PDF
 
@@ -643,7 +643,7 @@ overlap).
 comparisons, `a if cond else b`, `pi`, `e`, and the functions `sin cos tan arcsin arccos arctan atan2
 sinh cosh tanh exp log ln log2 log10 log1p sqrt abs sign floor ceil round min max where clip mod sigmoid
 relu softplus heaviside erf gamma normal(x, mu, sd)`. `^` is a power, as in maths. Nothing else is
-evaluated (no Python), so formulas are safe in any file. Points where a formula is undefined are gaps.
+evaluated (no Python), so formulas are safe in any file. Where a formula is undefined, the line breaks.
 
 **`python`**: your own matplotlib code, drawn in the template's fonts and colours at the slide's
 exact size. Runs only with `--allow-python`.
