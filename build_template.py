@@ -110,13 +110,13 @@ THEMES = {
         "footline": "text",
         "cover": "plain", "cover_text": "accent1",
     },
-    "modern": {  # clean sans-serif: white slides, teal accent rule under the title, left-aligned covers
+    "modern": {  # clean sans-serif: white slides, a light hairline under the title, left-aligned covers
         "label": "Beamer Modern (clean sans-serif)",
         "colors": dict(dk1="1F2933", lt1="FFFFFF", dk2="1B2A41", lt2="F1F4F7", accent1="0B7189",
                        accent2="D1495B", accent3="2A7F62", accent4="E9A03B", accent5="5C6BC0",
                        accent6="8A94A6", hlink="0B7189", folHlink="5C6BC0"),
         "fonts": ("Calibri Light", "Calibri"),
-        "frame": "accent", "title_color": "tx2", "rule": "accent1",
+        "frame": "rule", "title_color": "tx2", "rule": ("bg1", 85, 0),
         "footline": "text",
         "cover": "left", "cover_text": "tx2",
         "bullets": [("•", 100), ("–", 100), ("•", 100)],
@@ -130,21 +130,21 @@ THEMES = {
                        accent6="94A3B8", hlink="7DD3FC", folHlink="C4B5FD"),
         "fonts": ("Calibri Light", "Calibri"),
         "background": {"texture": "grain", "strength": 0.6},
-        "frame": "accent", "title_color": "tx2", "rule": "accent1",
+        "frame": "rule", "title_color": "tx2", "rule": ("bg1", 75, 25),
         "footline": "text",
         "cover": "left", "cover_text": "tx2",
         "bullets": [("•", 100), ("–", 100), ("•", 100)],
     },
-    "graphite": {  # metropolis on dark: graphite bar with an orange stripe, teal structure
+    "graphite": {  # metropolis on dark: graphite title bar, teal structure, orange alerts
         "label": "Graphite (dark, Metropolis-inspired)",
         "dark": True,
         "colors": dict(text="ECEFF1", background="1F2428", text2="FFFFFF", background2="2B3137",
                        accent1="56B6C2", accent2="F28C28", accent3="98C379", accent4="E5C07B", accent5="C678DD",
                        accent6="8B949E", hlink="F28C28", folHlink="E5C07B"),
         "fonts": ("Calibri", "Calibri"),
-        "bar": "bg2", "bar_text": "tx1", "bar_stripe": "accent2",
+        "bar": "bg2", "bar_text": "tx1",
         "footline": "text",
-        "cover": "left", "cover_text": "tx2", "rule": "accent2",
+        "cover": "left", "cover_text": "tx2",
         "bullets": [("▸", 100), ("–", 100), ("•", 100)],
     },
     "chalkboard": {  # lecture-hall blackboard: chalk-white text, chalk-yellow titles, pastel accents
@@ -168,9 +168,9 @@ THEMES = {
                        accent6="90A4AE", hlink="64D2FF", folHlink="B39DDB"),
         "fonts": ("Calibri Light", "Calibri"),
         "background": {"gradient": ["bg1", "bg2"], "angle": 35},
-        "frame": "accent", "title_color": "tx2", "rule": "accent1",
+        "frame": "rule", "title_color": "tx2", "rule": ("bg1", 75, 25),
         "footline": "text",
-        "cover": "box", "cover_text": "bg1", "radius": 50000,
+        "cover": "plain", "cover_text": "tx2",
         "bullets": [("•", 100), ("–", 100), ("•", 100)],
     },
     # ---- paper-like and other light looks ---------------------------------------------------------
@@ -206,7 +206,7 @@ THEMES = {
         "fonts": ("Arial", "Arial"),
         "frame": "plain", "title_color": "tx1", "title_bold": True,
         "footline": "text",
-        "cover": "left", "cover_text": "tx1", "rule": "accent2",
+        "cover": "left", "cover_text": "tx1",
         "bullets": [("–", 100), ("•", 100), ("–", 100)],
     },
 }
@@ -217,11 +217,11 @@ DESCRIPTIONS = {  # one line each for `--list` and `ppt_templated.py --templates
     "paper": "Journal look: hairline rules, grey footline, Georgia / Times New Roman",
     "oxford": "Navy title bar with gold stripes, square title box, Constantia / Cambria (default)",
     "classic": "No bars, blue titles, Cambria (Beamer default theme)",
-    "modern": "White, teal accent bar under titles, left-aligned covers, Calibri",
+    "modern": "White, hairline under titles, left-aligned covers, Calibri Light / Calibri",
     "midnight": "Dark slate with fine grain, sky-blue structure, coral alerts",
-    "graphite": "Dark graphite bar with an orange stripe, teal structure (metropolis, dark)",
+    "graphite": "Dark graphite title bar, teal structure, orange alerts (metropolis, dark)",
     "chalkboard": "Blackboard texture, chalk-white text, chalk-yellow titles",
-    "aurora": "Dark blue-to-violet gradient, cyan structure, rounded title box",
+    "aurora": "Dark blue-to-violet gradient, cyan structure, centred covers",
     "parchment": "Paper texture, sepia ink, Georgia / Cambria",
     "notebook": "Graph-paper background, ink-blue structure, red-pen alerts",
     "minimal": "Black on white, bold titles, a single red accent, Arial",
@@ -229,7 +229,7 @@ DESCRIPTIONS = {  # one line each for `--list` and `ppt_templated.py --templates
 # Style keys (all optional; the defaults give the Madrid look of "blue"). TEMPLATE_GUIDE.md explains them.
 DEFAULTS = {"fonts": ("Calibri", "Calibri"), "bar": "accent1", "bar_text": "bg1",
             "foot": ["accent1", "accent1", "accent1"], "foot_text": ["bg1", "bg1", "bg1"]}
-CHOICES = {"frame": ("bar", "rule", "accent", "plain"), "footline": ("boxes", "text"),
+CHOICES = {"frame": ("bar", "rule", "plain"), "footline": ("boxes", "text"),
            "cover": ("box", "rules", "left", "plain")}
 THEME_KEYS = {"label", "description", "dark", "colors", "fonts", "background", "bar", "bar_text", "bar_stripe",
               "frame", "title_color", "rule", "footline", "foot", "foot_text", "foot_rule", "foot_stripe", "cover",
@@ -511,9 +511,6 @@ def build(t, out_path):
             deco += shape(16, "Frame Title Stripe", (0, BAR_H, W, STRIPE), fill=t["bar_stripe"])
     elif frame == "rule":
         deco = shape(10, "Frame Title Rule", (BODY[0], BAR_H - 0.03, BODY[2], RULE), fill=t.get("rule", "tx1"))
-    elif frame == "accent":  # light hairline under the title with a short accent bar on its left end
-        deco = (shape(10, "Frame Title Rule", (BODY[0], BAR_H - 0.03, BODY[2], RULE), fill=hairline(t))
-                + shape(16, "Frame Title Accent", (BODY[0], BAR_H - 0.07, 1.2, 0.08), fill=t.get("rule", "accent1")))
     master_tree = tree(deco + footline(t, 11) + title_ph + body_ph, "", background_xml(t, master))
     mel = master._element
     mel.replace(mel.find(qn("p:cSld")), parse_xml(master_tree))
@@ -564,7 +561,7 @@ def build(t, out_path):
     sub_attrs = ' i="1"' if t.get("subtitle_italic") else ""
     left = cover == "left"
     al, ins, no_bu = ("l" if left else "ctr"), (0 if left else 0.3), (no_bullet, ' marL="0" indent="0"')
-    if left:  # flush left: the title sits on a short accent bar, whatever its number of lines
+    if left:  # flush left, title above the subtitle; no lines or bars
         tx, tw, sx, sw = 0.9, W - 1.8, 0.9, W - 1.8
         T = dict(title=(tx, 1.4, tw, 1.6), size=4000, anchor="b", sub=3.32, author=4.1, inst=4.6, date=5.05)
         S = dict(title=(sx, 2.2, sw, 1.45), size=3600, anchor="b", sub=3.97)
@@ -575,9 +572,7 @@ def build(t, out_path):
     pad = f'lIns="{e(ins)}" ' if left else ""
 
     def rules(top, bottom, x, w):
-        """booktabs-style: heavier rule above the title, lighter rule below it; or the accent bar under it."""
-        if left:
-            return shape(30, "Title Accent", (x, bottom + 0.12, 1.3, 0.09), fill=t.get("rule", "accent1"))
+        """booktabs-style: heavier rule above the title, lighter rule below it."""
         if cover != "rules":
             return ""
         return (shape(30, "Title Rule Top", (x, top, w, RULE * 2), fill=cover_text)

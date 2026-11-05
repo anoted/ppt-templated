@@ -23,6 +23,7 @@ from pptx import Presentation  # noqa: E402
 import build_template  # noqa: E402
 import datafiles  # noqa: E402
 import flows  # noqa: E402
+import metrics  # noqa: E402
 import ppt_templated as pt  # noqa: E402
 
 try:
@@ -114,10 +115,15 @@ class Items(unittest.TestCase):
         ]})
         self.assertEqual(builder.warnings, [])
         names = [sh.name for s in prs.slides for sh in s.shapes]
-        self.assertIn("Quote", names)
+        self.assertTrue(any(n.startswith("Quote:") for n in names), names)
         self.assertIn("Timeline", names)
+        # no decorative strips or bars: a card is one shape, a quote one text box
+        deep = [sh.name for s in prs.slides for sh in pt.iter_shapes_deep(s.shapes)]
+        self.assertFalse([n for n in deep if "Accent" in n or "Bar" in n or "Strip" in n], deep)
+        self.assertEqual(sum(n.startswith("Card:") for n in deep), 3)
         texts = " ".join(sh.text_frame.text for sh in prs.slides[0].shapes if sh.has_text_frame)
         self.assertIn("One big message", texts)
+        self.assertEqual(len(prs.slides[0].shapes), 1)  # kicker, message, subtitle: one box, they cannot overlap
         self.assertIn("Kicker", texts)
         info = {i["slide"]: i for i in builder.slide_info}
         self.assertEqual(info[1]["layout"], "statement")
@@ -127,6 +133,59 @@ class Items(unittest.TestCase):
         builder, _, _ = build({"slides": [{"title": "x", "content": [{"cards": ["a"], "colour": "alert"}]}]},
                               check=True)
         self.assertTrue(any("did you mean 'color'" in w for w in builder.warnings), builder.warnings)
+
+
+class TextMeasure(unittest.TestCase):
+    def test_word_wrap(self):
+        f = metrics.font("Calibri")
+        self.assertAlmostEqual(f.char("a"), 0.479, places=3)  # Carlito = Calibri metrics
+        one = metrics.text_width("word", 72, "Calibri")
+        self.assertEqual(metrics.text_lines("word word", one * 1.5, 72, "Calibri"), 2)  # breaks between words
+        self.assertEqual(metrics.text_lines("word word", one * 2.4, 72, "Calibri"), 1)
+        self.assertEqual(metrics.text_lines("a\nb\n", 5, 12), 3)  # paragraphs, an empty one included
+        self.assertEqual(metrics.text_lines("x" * 40, metrics.text_width("x" * 10, 12) * 1.03, 12), 4)  # long word
+        self.assertGreater(metrics.text_width("**Bold**", 20), metrics.text_width("Bold", 20))
+        self.assertAlmostEqual(metrics.text_width("`code`", 10), 4 * 0.6 * 10 / 72)
+        self.assertGreater(metrics.font("Some Unknown Font").avg, metrics.font("Arial").avg)  # safe side
+
+    def test_cards_grow_with_their_text(self):
+        long = "A sentence that keeps going for a while so that it has to wrap onto several lines in a card."
+        heights = []
+        for text in ("Short.", long):
+            builder, prs, _ = build({"slides": [{"title": "C", "content": [{"cards": [
+                {"title": "One", "text": text}, {"title": "Two", "text": "x"}, {"title": "Three", "text": "y"}]}]}]})
+            cards = [sh for sh in pt.iter_shapes_deep(prs.slides[0].shapes) if sh.name.startswith("Card:")]
+            heights.append(cards[0].height)
+            self.assertEqual(len({c.height for c in cards}), 1)  # a row shares one height
+        self.assertGreater(heights[1], heights[0] * 1.5)
+
+    def test_long_words_shrink_then_warn(self):
+        builder, _, _ = build({"slides": [{"title": "C", "content": [{"cards": {"columns": 4, "items": [
+            {"title": "Internationalization", "text": "x"}, "B", "C", "D"]}}]}]}, check=True)
+        self.assertEqual(builder.warnings, [])  # the text got a little smaller instead of breaking the word
+        builder, _, _ = build({"slides": [{"title": "C", "content": [{"cards": {"columns": 4, "items": [
+            {"title": "Pneumonoultramicroscopicsilicovolcanoconiosis", "text": "x"}, "B", "C", "D"]}}]}]})
+        self.assertTrue(any("wider than a card" in w for w in builder.warnings), builder.warnings)
+
+    def test_long_block_title_gets_a_taller_bar(self):
+        builder, prs, _ = build({"slides": [{"title": "B", "content": [{"columns": [
+            [{"block": {"title": "A block title long enough to need a second line in a half column", "text": "x"}}],
+            [{"block": {"title": "Short", "text": "x"}}]]}]}]})
+        heads = [sh for sh in pt.iter_shapes_deep(prs.slides[0].shapes) if sh.shape_type == 1
+                 and sh.text_frame.text.startswith(("A block", "Short"))]
+        self.assertEqual(len(heads), 2)
+        self.assertGreater(heads[0].height, heads[1].height * 1.6)
+
+
+class PreviewMatching(unittest.TestCase):
+    def test_rendered_lines_are_matched_to_their_shape(self):
+        import preview
+        texts = [((1, 1, 9, 4), preview._letters("One message, sized to fill the slide")),
+                 ((1, 4.2, 9, 5), preview._letters("layout: statement"))]
+        # the third line of the message has spilled into the subtitle's box: it still belongs to the message
+        self.assertEqual(preview._owner("slide", (4, 4.3, 5, 4.9), texts), 0)
+        self.assertEqual(preview._owner("layout: statement", (4, 4.4, 6, 4.7), texts), 1)
+        self.assertIsNone(preview._owner("▶", (0, 0, 1, 1), texts))  # a bullet glyph alone
 
 
 class Overflow(unittest.TestCase):
@@ -283,9 +342,9 @@ def _have_libreoffice():
 @unittest.skipUnless(_have_libreoffice(), "needs LibreOffice and PyMuPDF")
 class Measuring(unittest.TestCase):
     def test_overflow_is_measured_in_the_rendered_slides(self):
-        long = " ".join(["WWWWWWWW"] * 16)
+        long = " ".join(["WWWWWWWW"] * 45)  # too much even when shrunk: it runs off the bottom
         content = {"meta": {"template": "blue"}, "slides": [
-            {"title": "Overflow", "content": [{"columns": [[{"block": {"title": "A", "text": long, "size": 26}}],
+            {"title": "Overflow", "content": [{"columns": [[{"block": {"title": "A", "text": long, "size": 30}}],
                                                            [{"block": {"title": "B", "text": "short"}}]]}]},
             {"title": "Fine", "content": [["one", "two"]]}]}
         tmp = tempfile.mkdtemp(prefix="ppt_test_")
@@ -297,7 +356,8 @@ class Measuring(unittest.TestCase):
             pt.main([path, "--preview", "--json"])
         rep = json.loads(out.getvalue())
         measured = [w for w in rep["warnings"] if "(measured)" in w["message"]]
-        self.assertTrue(any(w["slide"] == 1 and "Block: A" in w["message"] for w in measured), rep["warnings"])
+        self.assertTrue(any(w["slide"] == 1 and "below the content area" in w["message"] for w in measured),
+                        rep["warnings"])
         self.assertFalse(any(w["slide"] == 2 for w in measured), rep["warnings"])
 
 

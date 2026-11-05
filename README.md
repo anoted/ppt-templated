@@ -91,7 +91,7 @@ All in `templates/`; pick one by name with `meta.template: midnight` or `-t midn
 | **`oxford`** ★ default | light | Navy title bar with gold stripes, square title box; Constantia / Cambria |
 | `paper` | light | Journal look: hairline rules, grey text footline; Georgia / Times New Roman |
 | `classic` | light | Blue frame titles, no bars (Beamer `default`); Cambria |
-| `modern` | light | White, teal accent bar under titles, left-aligned covers; Calibri |
+| `modern` | light | White, hairline under titles, left-aligned covers; Calibri |
 | `blue` | light | Blue title bar and footline boxes (Beamer `Madrid`) |
 | `charcoal` | light | Dark slate title bar, orange alerts (Beamer `metropolis`) |
 | `crimson` | light | Light grey title bar, dark red titles (Beamer `Beaver`) |
@@ -99,7 +99,7 @@ All in `templates/`; pick one by name with `meta.template: midnight` or `-t midn
 | `parchment` | light | **Paper texture**, sepia ink, rules; Georgia / Cambria |
 | `notebook` | light | **Graph-paper** background, ink-blue titles, red-pen accents |
 | `midnight` | dark | Deep slate with fine grain, sky-blue structure, coral alerts |
-| `graphite` | dark | Graphite bar with an orange stripe (metropolis, dark) |
+| `graphite` | dark | Graphite title bar, teal structure, orange alerts (metropolis, dark) |
 | `aurora` | dark | Blue-to-violet **gradient**, cyan structure |
 | `chalkboard` | dark | **Blackboard** texture, chalk-white text, chalk-yellow titles |
 
@@ -231,6 +231,7 @@ plots.py              draws `plot:` figures (matplotlib), incl. safe formulas an
 flows.py              lays out `flow:` / `steps:` diagrams and routes their connectors
 media.py              reads figure files: SVG/PDF/raster sizes, conversion, cache
 datafiles.py          reads `data:` files (CSV/TSV/JSON) for tables, charts and plots
+metrics.py            glyph widths of the template fonts: how many lines a text takes in a box
 preview.py            renders a .pptx to PNGs + contact sheets; measures the layout (PowerPoint or LibreOffice)
 build_template.py     builds templates from themes (built-in or a theme file)
 textures.py           generated backgrounds: paper, grid, dots, lines, chalk, grain
@@ -247,7 +248,7 @@ TEMPLATE_GUIDE.md     how to make or adapt a template
 ## Maintaining the docs
 
 **[YAML_GUIDE.md](YAML_GUIDE.md) must change in the same commit as `ppt_templated.py`, `plots.py`,
-`flows.py`, `media.py`, `datafiles.py` or `preview.py`** whenever a YAML key, value, default, item,
+`flows.py`, `media.py`, `datafiles.py`, `metrics.py` or `preview.py`** whenever a YAML key, value, default, item,
 layout, shape, effect or message changes; [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md) with
 `build_template.py` and `textures.py`. Update [AGENTS.md](AGENTS.md) when the workflow or the advice
 changes, and the "at a glance" part of this README if it is affected. Run the tests

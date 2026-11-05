@@ -60,7 +60,10 @@ python ppt_templated.py talk.yaml --preview    # build talk.pptx, render slide i
 `(measured)` come from the rendered slides: with PowerPoint (Windows) text that runs into another
 shape, out of its block or below the content area; with LibreOffice (any OS, needs PyMuPDF) the
 text lines of the rendered PDF: text that runs into other text, out of the bottom of a block, card or
-box, below the content area, or off the slide. The other size checks are estimates.
+box, below the content area, or off the slide. LibreOffice draws fonts it does not have (Georgia,
+Constantia, Calibri Light without Office installed) with wider stand-ins, so its text can take more
+room than in PowerPoint. The other size checks wrap the text word by word with the template fonts'
+glyph widths.
 
 - Paths in the YAML (`template`, `output`, image paths) are **relative to the YAML file**; `template`
   is also tried relative to the ppt-templated folder (`templates/beamer_blue.pptx` works anywhere).
@@ -155,13 +158,13 @@ Top level: `meta` (mapping) and `slides` (list of mappings). A slide is a mappin
 | `oxford` (default) | light | Navy title bar, gold stripes, Constantia / Cambria |
 | `paper` | light | Journal look: hairline rules, grey footline, Georgia / Times New Roman |
 | `classic` | light | No bars, blue titles, Cambria (Beamer default) |
-| `modern` | light | White, teal accent bar under titles, Calibri |
+| `modern` | light | White, hairline under titles, Calibri |
 | `blue` · `charcoal` · `crimson` | light | Beamer Madrid · metropolis · Beaver |
 | `minimal` | light | Black on white, bold titles, one red accent, Arial |
 | `parchment` | light | Paper texture, sepia ink, serif |
 | `notebook` | light | Graph-paper background, ink-blue and red-pen accents |
 | `midnight` | dark | Deep slate with fine grain, sky-blue structure |
-| `graphite` | dark | Graphite bar with an orange stripe (metropolis, dark) |
+| `graphite` | dark | Graphite title bar, teal structure (metropolis, dark) |
 | `aurora` | dark | Blue-to-violet gradient, cyan structure |
 | `chalkboard` | dark | Blackboard texture, chalk-white text, yellow titles |
 
@@ -456,9 +459,11 @@ See [§9](#9-flows-and-steps) and [§8](#8-plots).
 | Key | Default | Accepted values |
 |---|---|---|
 | `text` | required | The quotation; curly quotes are added unless it starts with one |
-| `by` | – | Attribution, shown as `— by` in muted text |
+| `by` | – | Attribution, shown as `— by` under the quote, right-aligned, in muted text |
 | `size` | 110% of level 1 | pt |
-| `color` | `structure` | The bar on the left |
+| `color` | text colour | Colour of the quotation |
+
+Set like LaTeX's `quote`: italic, indented on both sides, no rules or bars.
 
 ### 6.16 `timeline`
 
@@ -477,8 +482,8 @@ Events are spaced evenly along a line (not by date), dates above, text below.
 |---|---|---|
 | entries | required | `{date: text}`, `"date: text"`, `{date, text, color}`, or a text without a date |
 | `highlight` | – | Number or list (1 = first) |
-| `color` | `structure` | Dots, dates, line (per entry `color` wins) |
-| `size` | 72% of level 1 | Text size (pt); dates 12% larger |
+| `color` | `structure` | Dots and dates (per entry `color` wins); the line is a thin muted line |
+| `size` | 72% of level 1 | Text size (pt); dates 12% larger. With many events the text gets smaller so no word is broken |
 
 ### 6.17 `cards`
 
@@ -491,9 +496,10 @@ Events are spaced evenly along a line (not by date), dates above, text below.
   build: true                                     # one card per click
 ```
 
-A grid of rounded cards with an accent strip, title and text or bullets; cards in a row share one
+A grid of plain rounded cards, each with a title and text or bullets; cards in a row share one
 height and a short last row is centred. Columns: all in one row up to 4 cards, 3 per row for 5, 6 or 9,
-else 4.
+else 4. Each card is sized for its text (measured with the template font, word by word), and a title
+word too wide for a card makes the text a little smaller instead of being broken in the middle.
 
 | Key | Default | Accepted values |
 |---|---|---|
@@ -973,13 +979,14 @@ Errors stop the build and name the slide (`error: slide 7 "Results": ...`); warn
 | `content does not fit even at 65%` | Split the slide (or `overflow: split` for one list/table) |
 | `overflow: split works when the content is one bullets/numbered list or one table` | Split by hand, or reduce the slide to one list/table |
 | `title wraps even at N pt` | Shorten the title |
+| `cards: 'word' is wider than a card (N in) and breaks in the middle` (also `timeline`) | Fewer `columns` or entries, or a shorter word |
 | `x.png is only N dpi at this size` | Use a larger image or an SVG |
 | `no SVG renderer ...` | `pip install pymupdf` (or install Chrome/Edge, or `pip install cairosvg`) |
 | `image not found: <path>` | Paths are relative to the YAML |
 | `x.svg: the SVG needs a viewBox ...` | Add `viewBox="0 0 W H"` to the `<svg>` tag |
 | `PDF figures need PyMuPDF` | `pip install pymupdf`, or export SVG/PNG |
 | `flow diagram drawn with N pt text` | Give it more room, split it, or change `direction` |
-| `... runs into ... (measured)` | Real overlap found by PowerPoint: shorten, resize, or move to a new slide |
+| `... runs into ... (measured)` | Real overlap in the rendered slide: shorten, resize, or move to a new slide |
 | `... runs N pt below the content area (measured)` | Content spills into the footline: cut or split |
 | `text runs N pt out of the bottom of ... (measured)` | A block's (card's, node's) text is too long for it |
 | `... runs off the side of the slide (measured)` | A long word or equation: shorten it or give it more width |

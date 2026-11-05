@@ -68,8 +68,10 @@ accents must therefore be **light enough to carry dark text** (e.g. sky blue, co
 
 Bullet boxes copy the master's body styles (bullet characters, colors, indents, sizes of levels 1–9).
 Item sizes derive from the master's level-1 size: blocks 90%, tables 78%, flows 72%, code 70%,
-captions/charts/plots 66%, references 62%. Text heights are estimated from the theme fonts'
-character widths (known for the common Office fonts; others are estimated conservatively).
+captions/charts/plots 66%, references 62%. Box heights come from wrapping the text word by word with
+the theme fonts' real glyph widths (`metrics.py`: exact for Calibri, Cambria, Arial and Times New
+Roman; scaled from the closest of them for Georgia, Constantia, Segoe UI and Aptos; a slightly wide
+stand-in for any other font, so text still fits).
 
 ### Footline tokens
 
@@ -118,13 +120,12 @@ name too.
 # forest.yaml
 name: forest                       # -> templates/beamer_forest.pptx
 label: Beamer Forest
-description: Forest green bar with a gold stripe
+description: Forest green title bar, serif headings
 colors: {text: "1B1B1B", background: "FFFFFF", text2: "1F3D2B", background2: "EEF3EF", accent1: "2C5F2D",
          accent2: "C8553D", accent3: "3E7CB1", accent4: "E0A458", accent5: "7FA99B",
          accent6: "8C8C8C", hlink: "2C5F2D", folHlink: "1F3D2B"}
 fonts: [Cambria, Calibri]          # [headings, body]
 frame: bar
-bar_stripe: accent4
 ```
 
 A dark one with a texture:
@@ -136,8 +137,8 @@ dark: true                         # light text on a dark background
 colors: {text: "E6E6E6", background: "16181D", text2: "FFFFFF", background2: "22262E",
          accent1: "7CC4FA", accent2: "FF8A80", accent3: "9CCC65", accent4: "FFD54F"}
 background: {texture: grain, strength: 0.7}
-frame: accent
-rule: accent1
+frame: rule
+rule: [bg1, 75, 25]                # a faint line, just lighter than the background
 footline: text
 cover: left
 ```
@@ -160,16 +161,16 @@ optional except what you want to change; missing colors come from the Oxford the
 | `colors` | Oxford's | The 12 slots of §1 as hex `"RRGGBB"` (quote them in YAML). `dk1`/`lt1`/`dk2`/`lt2` may be written `text`/`background`/`text2`/`background2`, and always mean those roles, also with `dark: true` |
 | `fonts` | `[Calibri, Calibri]` | `[headings, body]` |
 | `background` | `bg1` | The slide background: a theme colour (`bg2`, `[bg1, 95, 0]`) · a texture name · `{gradient: [bg1, bg2], angle: 90}` (two or more theme colours, angle in degrees) · `{texture: paper, strength: 1, ink: accent1}` · `{image: picture.jpg}` (relative to the theme file, stretched over the slide) |
-| `frame` | `bar` | Frame titles: `bar` (filled bar) \| `rule` (hairline under the title) \| `accent` (light hairline with a short accent bar) \| `plain` |
+| `frame` | `bar` | Frame titles: `bar` (filled bar) \| `rule` (hairline under the title) \| `plain` |
 | `bar`, `bar_text` | `accent1`, `bg1` | Bar fill and title color (`frame: bar`) |
 | `bar_stripe` | – | Thin stripe under the bar |
 | `title_color` | `bar_text` | Frame-title color without a bar |
-| `rule` | `tx1` / `accent1` | Hairline color (`frame: rule`); accent-bar color (`frame: accent`, `cover: left`) |
+| `rule` | `tx1` | Hairline color (`frame: rule`) |
 | `footline` | `boxes` | `boxes` (three colored segments) \| `text` (grey text) |
 | `foot`, `foot_text` | `accent1` ×3, `bg1` ×3 | Segment fills and text colors (`boxes`): author, title, date |
 | `foot_stripe` | – | Stripe above a boxed footline |
 | `foot_rule` | – | Hairline above a text footline |
-| `cover` | `box` | Title and section slides: `box` (filled title box) \| `rules` (rules above and below) \| `left` (flush left, title on an accent bar) \| `plain` |
+| `cover` | `box` | Title and section slides: `box` (filled title box) \| `rules` (rules above and below) \| `left` (flush left) \| `plain` (centred) |
 | `cover_text` | `bg1` (box), else `accent1` | Cover title color |
 | `radius` | 12000 | Corner of the title box (0 = square; 50000 = round ends) |
 | `bullets` | `[[►, 70], [•, 100], [–, 100]]` | `[char, size %]` per level, repeated for deeper levels |
@@ -196,16 +197,16 @@ average, since tints and text are chosen for it.
 | `oxford` (default) | Navy bar with gold stripes, square title box | Constantia / Cambria |
 | `paper` | Hairline rules, grey text footline, journal look | Georgia / Times New Roman |
 | `classic` | No bars, blue titles (Beamer default) | Cambria |
-| `modern` | White, teal accent bar under titles, left-aligned covers | Calibri Light / Calibri |
+| `modern` | White, hairline under titles, left-aligned covers | Calibri Light / Calibri |
 | `blue` | Blue bar and three-part footline (Madrid) | Calibri |
 | `charcoal` | Dark slate bar, orange alerts (metropolis) | Calibri |
 | `crimson` | Light grey bar, dark red titles (Beaver) | Cambria / Calibri |
 | `minimal` | Black on white, bold titles, one red accent | Arial |
 | `parchment` | Paper texture, sepia ink, rules | Georgia / Cambria |
 | `notebook` | Graph-paper texture, ink-blue titles, red-pen rule | Calibri Light / Calibri |
-| `midnight` (dark) | Deep slate with grain, sky-blue accent bar, left-aligned covers | Calibri Light / Calibri |
-| `graphite` (dark) | Graphite bar with an orange stripe (metropolis, dark) | Calibri |
-| `aurora` (dark) | Blue-to-violet gradient, cyan structure, rounded title box | Calibri Light / Calibri |
+| `midnight` (dark) | Deep slate with grain, sky-blue structure, left-aligned covers | Calibri Light / Calibri |
+| `graphite` (dark) | Graphite title bar, teal structure, orange alerts (metropolis, dark) | Calibri |
+| `aurora` (dark) | Blue-to-violet gradient, cyan structure, centred covers | Calibri Light / Calibri |
 | `chalkboard` (dark) | Blackboard texture, chalk-white text, chalk-yellow titles | Cambria / Calibri |
 
 **Fonts:** use fonts installed wherever the deck is opened (Office fonts: Calibri, Cambria,
@@ -238,7 +239,7 @@ Open a template (its preview slides are removed on every build, so leave them).
 - **Background:** View → Slide Master → select the master → Background Styles → Format Background
   (colour, gradient or picture); the layouts follow it.
 - **Master:** View → Slide Master (the top thumbnail is the master, the rest are layouts). Bar,
-  stripes and footline are shapes named *Frame Title Bar*, *Frame Title Stripe/Rule/Accent*,
+  stripes and footline are shapes named *Frame Title Bar*, *Frame Title Stripe/Rule*,
   *Footline Author/Title/Date/Slide Number* (Home → Arrange → Selection Pane). Fill them with
   *theme* colors so they follow the palette. Title Slide and Section Header hide the master's
   shapes and carry their own footline copy.

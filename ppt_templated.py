@@ -66,6 +66,7 @@ from pptx.util import Emu, Pt
 
 import flows
 import media
+import metrics
 
 # --------------------------------------------------------------------------------------
 # Constants
@@ -177,8 +178,6 @@ SYNONYMS = {"colour": "color", "font_size": "size", "fontsize": "size", "src": "
 
 # Average character width (em) of common Office fonts in English text, measured and padded ~6% for
 # word wrapping. Text heights are estimated from these; unknown fonts get 0.5, which is safe for all.
-CHAR_W = {"cambria": 0.457, "calibri": 0.436, "calibri light": 0.43, "georgia": 0.476, "times new roman": 0.437,
-          "constantia": 0.462, "arial": 0.482, "helvetica": 0.482, "segoe ui": 0.469, "aptos": 0.469}
 
 MARK = "\u2063"  # invisible separator used to mark math runs until they are converted
 FLOW_MIN_PT = 9   # flow/steps diagrams shrink to fit, but their text not below this size (pt)
@@ -248,14 +247,9 @@ def parse_aspect(v) -> float:
     return float(m[1]) / float(m[2] or 1)
 
 
-def est_lines(text: str, width_in: float, size_pt: float, char_w: float = 0.5) -> int:
-    """Estimated number of lines; **bold** text counts ~8% wider."""
-    per_line = max(6.0, width_in * 72.0 / (size_pt * char_w))
-    total = 0
-    for seg in str(text).split("\n"):
-        bold = sum(len(strip_markup(b)) for b in re.findall(r"\*\*(.+?)\*\*", seg))
-        total += max(1, math.ceil((len(strip_markup(seg)) + 0.08 * bold) / per_line))
-    return total
+def est_lines(text: str, width_in: float, size_pt: float, font="Calibri", bold: bool = False) -> int:
+    """Lines `text` takes in a box `width_in` wide: word wrap with the font's real glyph widths (metrics.py)."""
+    return metrics.text_lines(text, width_in, size_pt, font, bold)
 
 
 def resolve_color(spec):
@@ -804,8 +798,12 @@ class DeckBuilder:
         self.level_sizes, self.title_size = style_sizes(self.prs)
         lvl1 = self.prs.slide_master._element.find(f"{qn('p:txStyles')}/{qn('p:bodyStyle')}/{qn('a:lvl1pPr')}")
         self.body_indent = to_in(int(lvl1.get("marL", 342900))) if lvl1 is not None else 0.375
-        colors, fonts = self._theme()  # character widths of the body and heading fonts, for text estimates
-        self.cw, self.cw_head = (CHAR_W.get(str(fonts[k]).lower(), 0.5) for k in ("minor", "major"))
+        colors, fonts = self._theme()  # glyph widths of the body and heading fonts, for text estimates
+        self.fb, self.fh = metrics.font(fonts["minor"]), metrics.font(fonts["major"])
+        title_rpr = self.prs.slide_master._element.find(
+            f"{qn('p:txStyles')}/{qn('p:titleStyle')}/{qn('a:lvl1pPr')}/{qn('a:defRPr')}")
+        self.title_bold = title_rpr is not None and title_rpr.get("b") in ("1", "true")
+        self.lh = max(1.2, self.fb.line)  # line height of body text (em)
         self.dark = luminance(colors["bg1"]) < luminance(colors["tx1"])  # light text on a dark background
         self.W, self.H = to_in(self.prs.slide_width), to_in(self.prs.slide_height)
         self.area = self._content_area()
@@ -997,10 +995,10 @@ class DeckBuilder:
         tf.clear()
         size = self.title_size
         width = (fit_width or to_in(ph.width) or self.W - 1) - self._logo_reserve(slide)
-        lines = est_lines(text, width - 0.2, size, self.cw_head)
+        lines = est_lines(text, width - 0.2, size, self.fh, self.title_bold)
         if lines > 1:  # beamer-like: shrink long frame titles instead of overflowing the bar
             size = max(size * 0.72, size / lines ** 0.5)
-            if est_lines(text, width - 0.2, size, self.cw_head) > 1:
+            if est_lines(text, width - 0.2, size, self.fh, self.title_bold) > 1:
                 self.warn(f"title wraps even at {size:.0f} pt ({len(strip_markup(text))} characters) - shorten it")
         p = tf.paragraphs[0]
         self._add_runs(p, str(text), {"size": size if size != self.title_size else None})
@@ -1022,7 +1020,7 @@ class DeckBuilder:
         if title_ph is not None:
             title_ph.text_frame.clear()
             size = None
-            lines = est_lines(str(m.get("title", "")), to_in(title_ph.width) - 0.5, 36, self.cw_head)
+            lines = est_lines(str(m.get("title", "")), to_in(title_ph.width) - 0.5, 36, self.fh)
             if lines > 2:
                 size = 28
             self._add_runs(title_ph.text_frame.paragraphs[0], str(m.get("title", "")), {"size": size})
@@ -1222,7 +1220,7 @@ class DeckBuilder:
         for lvl, text in paras:
             size = self._sz(lvl, scale, opts)
             avail = width - (0.36 * (lvl + 1) if indent else 0) - 0.05
-            h += est_lines(text, avail, size, self.cw) * size * 1.2 / 72 + (8 if lvl == 0 else 4) / 72
+            h += est_lines(text, avail, size, self.fb) * size * self.lh / 72 + (8 if lvl == 0 else 4) / 72
         return h + 0.12
 
     def _measure(self, kind, it, w, scale):
@@ -1235,7 +1233,7 @@ class DeckBuilder:
         if kind in BLOCK_COLORS:
             b = it[kind] if isinstance(it[kind], dict) else {"text": str(it[kind])}
             size = (b.get("size") or self.level_sizes[0] * 0.9) * scale
-            head = size * 1.1 * 1.35 / 72 + 0.12
+            head = self._block_head(b, w, size)
             if b.get("bullets"):
                 body = self._text_height(flatten_bullets(b["bullets"]), w - 0.3, scale, {"size": size / scale})
             else:
@@ -1591,11 +1589,16 @@ class DeckBuilder:
         return r
 
     # ---- blocks -------------------------------------------------------------------------
+    def _block_head(self, spec, w, size):
+        """Height of a block's title bar: one line, or more when a long title wraps."""
+        lines = est_lines(str(spec.get("title") or ""), w - 0.34, size * 1.05, self.fb, True)
+        return lines * size * 1.05 * self.lh / 72 + size * 0.2 / 72 + 0.12
+
     def _render_block(self, slide, kind, it, b, scale):
         spec = it[kind] if isinstance(it[kind], dict) else {"text": str(it[kind])}
         color = spec.get("color", BLOCK_COLORS[kind])
         size = round((spec.get("size") or self.level_sizes[0] * 0.9) * scale, 1)
-        head_h = size * 1.1 * 1.35 / 72 + 0.12
+        head_h = self._block_head(spec, b.w, size)
         radius = 0.09
         body = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, inch(b.x), inch(b.y), inch(b.w), inch(b.h))
         drop_style(body)
@@ -1830,9 +1833,10 @@ class DeckBuilder:
         ncols = max(len(r) for r in all_rows)
         all_rows = [r + [""] * (ncols - len(r)) for r in all_rows]
         size = round((t.get("size") or self.level_sizes[0] * 0.78) * scale, 1)
-        cols = [[strip_markup(r[j]) for r in all_rows] for j in range(ncols)]
-        need = [max(map(len, c)) * size * 0.55 / 72 + 0.35 for c in cols]  # every cell on one line
-        width = w * float(t["width"]) if t.get("width") else min(w, max(sum(need) * 1.25, w * 0.55))
+        bold = [bool(header) and i == 0 for i in range(len(all_rows))]
+        tw = lambda v, b: metrics.text_width(v, size, self.fb, b)  # noqa: E731
+        need = [max(tw(r[j], b) for r, b in zip(all_rows, bold)) + 0.35 for j in range(ncols)]  # one line each
+        width = w * float(t["width"]) if t.get("width") else min(w, max(sum(need) * 1.45, w * 0.55))
         if t.get("widths"):
             given = [float(x) for x in t["widths"]][:ncols]
             given += [sum(given) / len(given)] * (ncols - len(given))
@@ -1844,14 +1848,14 @@ class DeckBuilder:
             rest = width - sum(n for n, s in zip(need, short) if s)
             longs = sum(n for n, s in zip(need, short) if not s)
             colw = [n if s else rest * n / longs for n, s in zip(need, short)]
-            for j, c in enumerate(cols):
-                word = max((len(x) for cell in c for x in cell.split()), default=1) * size * 0.6 / 72 + 0.3
+            for j in range(ncols):
+                word = max((tw(x, b) for r, b in zip(all_rows, bold) for x in r[j].split()), default=0.1) + 0.3
                 if colw[j] < word:
                     k = max(range(ncols), key=lambda i: colw[i])
                     colw[k] -= word - colw[j]
                     colw[j] = word
-        heights = [size * (1.2 * max(est_lines(c, cw - 0.2, size, self.cw * (1.08 if header and i == 0 else 1))
-                                     for c, cw in zip(r, colw)) + 0.85) / 72 for i, r in enumerate(all_rows)]
+        heights = [size * (self.lh * max(est_lines(c, cw - 0.2, size, self.fb, b) for c, cw in zip(r, colw)) + 0.85) / 72
+                   for r, b in zip(all_rows, bold)]
         return all_rows, size, width, colw, heights
 
     def _render_table(self, slide, it, b, scale):
@@ -2118,10 +2122,13 @@ class DeckBuilder:
             if e.get("value") is None:
                 raise ValueError("each stats entry needs a value, e.g. {value: '95%', label: accuracy}")
         cw = min((w - STAT_GAP * (len(entries) - 1)) / len(entries), STAT_MAX_W)  # few numbers stay together
-        vs = round(float(it["stats"].get("size") or self.level_sizes[0] * 1.8) * scale, 1)
-        ls = round(self.level_sizes[0] * 0.8 * scale, 1)
-        lines = max([est_lines(str(e["label"]), cw - 0.1, ls, self.cw) for e in entries if e.get("label")] or [0])
-        return entries, cw, vs, ls, vs * 1.2 / 72 + (lines * ls * 1.2 / 72 + 0.06 if lines else 0) + 0.12
+        vs = float(it["stats"].get("size") or self.level_sizes[0] * 1.8) * scale
+        widest = max(metrics.text_width(str(e["value"]), 1.0, self.fb, True) for e in entries)
+        vs = round(max(min(vs, (cw - 0.1) / widest if widest else vs), vs * 0.55), 1)  # numbers stay on one line
+        ls = round(self._fit_words([e.get("label") for e in entries], cw - 0.1, self.level_sizes[0] * 0.8 * scale), 1)
+        vl = max(est_lines(str(e["value"]), cw - 0.1, vs, self.fb, True) for e in entries)
+        lines = max([est_lines(str(e["label"]), cw - 0.1, ls, self.fb) for e in entries if e.get("label")] or [0])
+        return entries, cw, vs, ls, vl * vs * self.lh / 72 + (lines * ls * self.lh / 72 + 0.06 if lines else 0) + 0.12
 
     def _render_stats(self, slide, it, b, scale):
         entries, cw, vs, ls, h = self._stats_geometry(it, b.w, scale)
@@ -2225,23 +2232,45 @@ class DeckBuilder:
         box = Box((self.W - w) / 2, 0.6, w, self.H - 1.2)
         size, lines = lv * 1.1, 0
         for k in (2.6, 2.3, 2.0, 1.8, 1.6, 1.4, 1.25, 1.1):  # largest size that keeps it to three lines
-            lines = est_lines(str(text), w - 0.1, lv * k, self.cw_head)
+            lines = est_lines(str(text), w - 0.1, lv * k, self.fh)
             if lines <= 3 and lines * lv * k * 1.2 / 72 <= box.h * 0.6:
                 size = lv * k
                 break
+        narrow = w
         if 1 < lines <= 3 and "\n" not in str(text):  # balanced lines, not one word left on its own
-            narrow = len(strip_markup(str(text))) * size * self.cw_head / 72 / lines * 1.12 + 0.3
-            if narrow < w and est_lines(str(text), narrow - 0.1, size, self.cw_head) <= lines:
-                box = Box((self.W - narrow) / 2, box.y, narrow, box.h)
-        items = []
-        if kicker:
-            items.append(("text", {"text": str(kicker), "size": round(lv * 0.85), "align": "center",
-                                   "color": "structure", "bold": True}))
-        items.append(("text", {"text": str(text), "size": round(size), "align": "center", "_font": "+mj-lt"}))
-        if spec.get("subtitle"):
-            items.append(("text", {"text": str(spec["subtitle"]), "size": round(lv * 0.95), "align": "center",
-                                   "color": "muted"}))
-        self._render_items(slide, items, box, "center", top=True)
+            even = metrics.text_width(str(text), size, self.fh) / lines  # line length if all were equal
+            for k in (1.12, 1.18, 1.25, 1.35, 1.5):  # the narrowest box with the same line count, a little spare
+                if even * k + 0.3 < w and est_lines(str(text), even * k + 0.2, size, self.fh) <= lines:
+                    narrow = even * k + 0.3
+                    break
+        # one text box: should the font be wider than measured, the subtitle moves down instead of overlapping
+        size, ks, ss = round(size), round(lv * 0.85), round(lv * 0.95)
+        tb = slide.shapes.add_textbox(inch(box.x), inch(box.y), inch(box.w), inch(box.h))
+        tf = tb.text_frame
+        tf.word_wrap, tf.auto_size, tf.vertical_anchor = True, MSO_AUTO_SIZE.NONE, MSO_ANCHOR.MIDDLE
+        tf.margin_left = tf.margin_right = inch(0.02)
+        tf.margin_top = tf.margin_bottom = inch(0.04)
+        parts = ([(str(kicker), {"size": ks, "color": "structure", "bold": True}, 0)] if kicker else []) + [
+            (str(text), {"size": size, "font": "+mj-lt"}, (w - narrow) / 2)] + (
+            [(str(spec["subtitle"]), {"size": ss, "color": "muted"}, 0)] if spec.get("subtitle") else [])
+        height, first = 0.0, True
+        for txt, style, pad in parts:
+            for i, line in enumerate(txt.split("\n")):
+                p = tf.paragraphs[0] if first else tf.add_paragraph()
+                set_bullet(p, "none")
+                p.alignment = PP_ALIGN.CENTER
+                pPr = p._p.get_or_add_pPr()  # the message is narrower than the box: its lines come out even
+                pPr.set("marL", str(int(pad * EMU)))
+                pPr.set("marR", str(int(pad * EMU)))  # also 0, or LibreOffice keeps the previous paragraph's
+                if not first and i == 0:
+                    p.space_before = Pt(18)
+                    height += 0.25
+                first = False
+                self._add_runs(p, line, style)
+            height += est_lines(txt, w - 2 * pad - 0.1, style["size"], self.fh if pad else self.fb,
+                                style.get("bold", False)) * style["size"] * 1.2 / 72
+        tb.name = f"Statement: {strip_markup(str(text))[:40]}"
+        self._fill_info = (height / box.h if box.h else 0.0, 1.0)
         return slide
 
     def _logo_spec(self, v):
@@ -2307,41 +2336,56 @@ class DeckBuilder:
         return lg["w"] + 0.4
 
     # ---- quote, timeline, cards ----------------------------------------------------------------
+    def _fit_words(self, texts, width, size, bold=False, floor=0.8):
+        """`size`, made smaller when one word of `texts` is wider than `width` inches (a renderer would break
+        it in the middle), but not below `floor` * size."""
+        widest = max((metrics.text_width(w, 1.0, self.fb, bold) for t in texts if t not in (None, "")
+                      for w in str(t).split()), default=0.0)
+        if widest * size <= width or not widest:
+            return size
+        return max(math.floor(width / widest * 2) / 2, round(size * floor, 1))
+
+    def _broken_words(self, texts, width, size, bold, what):
+        """Warn when a word still does not fit `width` at `size`."""
+        one, fewer = {"cards": ("card", "columns"), "timeline": ("timeline entry", "entries")}[what]
+        for t in texts:
+            for w in str(t or "").split():
+                if metrics.text_width(w, size, self.fb, bold) > width:
+                    self.warn(f"{what}: '{strip_markup(w)}' is wider than a {one} ({width:.1f} in) and breaks in "
+                              f"the middle - use fewer {fewer} or a shorter word")
+                    return
+
     def _quote_geometry(self, it, w, scale):
+        """-> (text, size, attribution size, indent, height). Set like LaTeX's quote: indented on both sides."""
         q = it["quote"]
         if q.get("text") in (None, ""):
             raise ValueError("quote needs text, e.g. quote: {text: '...', by: Author}")
         size = round(float(q.get("size") or self.level_sizes[0] * 1.1) * scale, 1)
         by = round(self.level_sizes[0] * 0.8 * scale, 1)
         text = str(q["text"]).strip()
-        if not text.startswith(("\u201c", '"', "\u00ab")):
-            text = f"\u201c{text}\u201d"
-        h = est_lines(text, w - 0.45, size, self.cw) * size * 1.25 / 72 + 0.12
+        if not text.startswith(("“", '"', "«")):
+            text = f"“{text}”"
+        ind = min(0.6, w * 0.08)
+        h = est_lines(text, w - 2 * ind - 0.05, size, self.fb) * size * self.lh / 72 + 0.1
         if q.get("by"):
-            h += by * 1.3 / 72 + 0.1
-        return text, size, by, h
+            h += est_lines(f"— {q['by']}", w - 2 * ind - 0.05, by, self.fb) * by * self.lh / 72 + by * 0.5 / 72
+        return text, size, by, ind, h
 
     def _render_quote(self, slide, it, b, scale):
         q = it["quote"]
-        text, size, by, h = self._quote_geometry(it, b.w, scale)
+        text, size, by, ind, h = self._quote_geometry(it, b.w, scale)
         y = b.y + max(0.0, (b.h - h) / 2)
-        bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, inch(b.x), inch(y), inch(0.07), inch(h))
-        drop_style(bar)
-        self._fill(bar.fill, q.get("color", "structure"))
-        bar.line.fill.background()
-        bar.name = "Quote Bar"
-        tb = slide.shapes.add_textbox(inch(b.x + 0.3), inch(y), inch(b.w - 0.3), inch(h))
+        tb = slide.shapes.add_textbox(inch(b.x + ind), inch(y), inch(b.w - 2 * ind), inch(h))
         self._prep_tf(tb.text_frame)
-        self._fill_text(tb.text_frame, text, size=size, style={"italic": True})
+        self._fill_text(tb.text_frame, text, size=size, style={"italic": True, "color": q.get("color")})
         if q.get("by"):
             p = tb.text_frame.add_paragraph()
             set_bullet(p, "none")
-            p.space_before = Pt(round(by * 0.4, 1))
-            self._add_runs(p, f"\u2014 {q['by']}", {"size": by, "color": "muted"})
+            p.alignment = PP_ALIGN.RIGHT
+            p.space_before = Pt(round(by * 0.5, 1))
+            self._add_runs(p, f"— {q['by']}", {"size": by, "color": "muted"})
         tb.name = f"Quote: {strip_markup(text)[:40]}"
-        grp = slide.shapes.add_group_shape([bar, tb])
-        grp.name = "Quote"
-        self._animate(it, grp, "group")
+        self._animate(it, tb, "sp_text")
 
     @staticmethod
     def _entries(it, kind, keys, first):
@@ -2366,35 +2410,43 @@ class DeckBuilder:
         return out
 
     def _timeline_geometry(self, it, w, scale):
+        """-> (entries, slot width, text size, date size, date height, text height, dot size, total height)."""
         entries = self._entries(it, "timeline", {"date", "text", "color"}, "text")
         for e in entries:
             self._check("timeline entry", e, {"date", "text", "color"})
         n, lv = len(entries), self.level_sizes[0]
-        size = float(it["timeline"].get("size") or lv * 0.72) * scale
-        ds = round(size * 1.12, 1)
         slot = w / n
-        dh = max([est_lines(str(e["date"]), slot - 0.1, ds, self.cw) for e in entries if e.get("date") is not None]
-                 or [0]) * ds * 1.2 / 72
-        th = max([est_lines(str(e["text"]), slot - 0.15, size, self.cw) for e in entries if e.get("text")]
-                 or [0]) * size * 1.2 / 72
-        dot = max(0.16, min(0.26, size / 72 * 1.1))
-        return entries, slot, round(size, 1), ds, dh, th, dot, dh + 0.12 + dot + 0.12 + th + 0.08
+        size = float(it["timeline"].get("size") or lv * 0.72) * scale
+        dates = [e["date"] for e in entries if e.get("date") is not None]
+        texts = [e["text"] for e in entries if e.get("text")]
+        k = min(self._fit_words(dates, slot - 0.1, size * 1.12, True) / (size * 1.12),
+                self._fit_words(texts, slot - 0.15, size, True) / size)  # highlighted entries are bold
+        size = round(size * k, 1)
+        ds = round(size * 1.12, 1)
+        dh = max([est_lines(str(d), slot - 0.1, ds, self.fb, True) for d in dates] or [0]) * ds * self.lh / 72
+        th = max([est_lines(str(t), slot - 0.15, size, self.fb, True) for t in texts] or [0]) * size * self.lh / 72
+        dot = max(0.14, min(0.22, size / 72 * 0.95))
+        return entries, slot, size, ds, dh, th, dot, dh + 0.12 + dot + 0.12 + th + 0.1
 
     def _render_timeline(self, slide, it, b, scale):
         tl = it["timeline"]
         entries, slot, size, ds, dh, th, dot, h = self._timeline_geometry(it, b.w, scale)
+        self._broken_words([e.get("text") for e in entries], slot - 0.15, size, True, "timeline")
         y = b.y + max(0.0, (b.h - h) / 2)
         line_y = y + dh + 0.12 + dot / 2
         hl = tl.get("highlight")
         hl = {whole(x, "timeline highlight") for x in (hl if isinstance(hl, list) else [hl])} if hl is not None else set()
         base = tl.get("color", "structure")
-        line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, inch(b.x + slot / 2), inch(line_y - 0.02),
-                                      inch(max(0.04, slot * (len(entries) - 1))), inch(0.04))
-        drop_style(line)
-        self._fill(line.fill, base, 0.55)
-        line.line.fill.background()
-        line.name = "Timeline Line"
         parts = []
+        if len(entries) > 1:  # the time axis: a plain line through the dots
+            x1, x2 = b.x + slot / 2, b.x + slot * (len(entries) - 0.5)
+            line = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, inch(x1), inch(line_y), inch(x2), inch(line_y))
+            drop_style(line)
+            line.line.width = Pt(1.25)
+            self._paint(line.line.color, "muted")
+            line.name = "Timeline Line"
+            parts.append(line)
+        groups = []
         for i, e in enumerate(entries):
             cx = b.x + slot * (i + 0.5)
             color = e.get("color", base)
@@ -2404,8 +2456,7 @@ class DeckBuilder:
             shp = slide.shapes.add_shape(MSO_SHAPE.OVAL, inch(cx - d / 2), inch(line_y - d / 2), inch(d), inch(d))
             drop_style(shp)
             self._fill(shp.fill, color, 0.55 if dim else 0.0)
-            self._paint(shp.line.color, "bg1")
-            shp.line.width = Pt(1.5)
+            shp.line.fill.background()
             shp.name = f"Timeline Dot {i + 1}"
             group = [shp]
             if e.get("date") is not None:
@@ -2424,8 +2475,9 @@ class DeckBuilder:
                                 align="center")
                 tb.name = f"Timeline: {strip_markup(str(e['text']))[:40]}"
                 group.append(tb)
-            parts.append(group)
-        self._finish_row(slide, it, [[line] + parts[0]] + parts[1:], "Timeline")
+            groups.append(group)
+        groups[0] = parts + groups[0]
+        self._finish_row(slide, it, groups, "Timeline")
 
     def _finish_row(self, slide, it, parts, name):
         """Animate a row of entries: one per click with `build`, else the whole row as one group."""
@@ -2438,11 +2490,25 @@ class DeckBuilder:
             self._last_main = parts[0][0]
             return
         flat = [s for shapes in parts for s in shapes]
+        if len(flat) == 1:
+            self._animate(it, flat[0], "sp_text")
+            return
         grp = slide.shapes.add_group_shape(flat)
         grp.name = name
         self._animate(it, grp, "group")
 
+    CARD_PAD = (0.15, 0.12)  # inner margin of a card: sides, top and bottom (in)
+
+    def _card_body(self, e):
+        """[(level or None, text)] of a card's body."""
+        if e.get("bullets"):
+            return flatten_bullets(e["bullets"])
+        if e.get("text") not in (None, ""):
+            return [(None, x) for x in str(e["text"]).split("\n")]
+        return []
+
     def _cards_geometry(self, it, w, scale):
+        """-> (entries, columns, card width, gap, text size, title size, row heights, total height)."""
         c = it["cards"]
         entries = self._entries(it, "cards", {"title", "text", "bullets", "color"}, "title")
         for e in entries:
@@ -2453,26 +2519,32 @@ class DeckBuilder:
         cols = max(1, min(cols, n))
         gap = 0.3
         cw = (w - gap * (cols - 1)) / cols
-        lv = self.level_sizes[0]
-        ts = round(float(c.get("size") or lv * 0.78) * scale, 1)
+        inner = cw - 2 * self.CARD_PAD[0]
+        ts = float(c.get("size") or self.level_sizes[0] * 0.78) * scale
+        bodies = [self._card_body(e) for e in entries]
+        # a title word wider than the card would be broken in the middle: the text gets a little smaller
+        ts = round(self._fit_words([e.get("title") for e in entries], inner - 0.05, ts * 1.15, True) / 1.15, 1)
         hs = round(ts * 1.15, 1)
         heights = []
-        for e in entries:
-            h = 0.12 + 0.07 + 0.1  # accent strip and padding
+        for e, body in zip(entries, bodies):
+            h = 2 * self.CARD_PAD[1] + 0.04
             if e.get("title"):
-                h += est_lines(str(e["title"]), cw - 0.3, hs, self.cw * 1.08) * hs * 1.2 / 72 + 0.06
-            if e.get("bullets"):
-                h += self._text_height(flatten_bullets(e["bullets"]), cw - 0.3, 1.0, {"size": ts}) - 0.12
-            elif e.get("text"):
-                h += self._text_height([(0, x) for x in str(e["text"]).split("\n")], cw - 0.3, 1.0, {"size": ts},
-                                       indent=False) - 0.12
-            heights.append(h + 0.1)
+                h += est_lines(str(e["title"]), inner - 0.05, hs, self.fb, True) * hs * self.lh / 72
+            if body:
+                h += self._text_height(body if e.get("bullets") else [(0, t) for _, t in body], inner, 1.0,
+                                       {"size": ts}, indent=bool(e.get("bullets"))) - 0.12
+            heights.append(h)
         rows = [max(heights[r * cols:(r + 1) * cols]) for r in range(-(-n // cols))]
         return entries, cols, cw, gap, ts, hs, rows, sum(rows) + gap * (len(rows) - 1)
 
     def _render_cards(self, slide, it, b, scale):
         c = it["cards"]
         entries, cols, cw, gap, ts, hs, rows, total = self._cards_geometry(it, b.w, scale)
+        inner = cw - 2 * self.CARD_PAD[0]
+        self._broken_words([e.get("title") for e in entries], inner - 0.05, hs, True, "cards")
+        for e in entries:
+            room = inner - (self.body_indent if e.get("bullets") else 0) - 0.05
+            self._broken_words([t for _, t in self._card_body(e)], room, ts, False, "cards")
         style = str(c.get("style", "tinted")).lower()
         y = b.y + max(0.0, (b.h - total) / 2)
         parts = []
@@ -2489,7 +2561,7 @@ class DeckBuilder:
                     card.line.fill.background()
                 elif style == "outline":
                     card.fill.background()
-                    card.line.width = Pt(1.25)
+                    card.line.width = Pt(1.0)
                     self._paint(card.line.color, color)
                 else:
                     self._fill(card.fill, color, 0.88)
@@ -2497,8 +2569,8 @@ class DeckBuilder:
                 text_color = "white" if style == "solid" else "tx1"
                 tf = card.text_frame
                 tf.word_wrap, tf.auto_size, tf.vertical_anchor = True, MSO_AUTO_SIZE.NONE, MSO_ANCHOR.TOP
-                tf.margin_left = tf.margin_right = inch(0.15)
-                tf.margin_top, tf.margin_bottom = inch(0.22), inch(0.08)
+                tf.margin_left = tf.margin_right = inch(self.CARD_PAD[0])
+                tf.margin_top = tf.margin_bottom = inch(self.CARD_PAD[1])
                 copy_body_style(self.prs, tf)
                 tf.clear()
                 first = True
@@ -2506,28 +2578,22 @@ class DeckBuilder:
                     p = tf.paragraphs[0]
                     set_bullet(p, "none")
                     p.alignment = PP_ALIGN.LEFT
-                    self._add_runs(p, str(e["title"]), {"size": hs, "bold": True, "color": text_color})
+                    self._add_runs(p, str(e["title"]), {"size": hs, "bold": True,
+                                                        "color": text_color if style == "solid" else color})
                     first = False
-                body = (flatten_bullets(e["bullets"]) if e.get("bullets") else
-                        [(None, x) for x in str(e.get("text") or "").split("\n")] if e.get("text") else [])
-                for lvl, txt in body:
+                for lvl, txt in self._card_body(e):
                     p = tf.paragraphs[0] if first else tf.add_paragraph()
-                    first = False
                     p.alignment = PP_ALIGN.LEFT
                     if lvl is None:
                         set_bullet(p, "none")
                     else:
                         p.level = min(lvl, 8)
-                    p.space_before = Pt(round(ts * 0.35, 1))
+                    if not first:
+                        p.space_before = Pt(round(ts * 0.4, 1))
+                    first = False
                     self._add_runs(p, txt, {"size": self._sz(lvl or 0, 1.0, {"size": ts}), "color": text_color})
                 card.name = f"Card: {strip_markup(str(e.get('title') or e.get('text') or ''))[:40]}"
-                strip = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, inch(x + 0.15), inch(y + 0.1),
-                                               inch(min(0.9, cw - 0.3)), inch(0.06))
-                drop_style(strip)
-                self._fill(strip.fill, "white" if style == "solid" else color)
-                strip.line.fill.background()
-                strip.name = "Card Accent"
-                parts.append([card, strip])
+                parts.append([card])
                 x += cw + gap
             y += rh + gap
         self._finish_row(slide, it, parts, "Cards")
@@ -2551,9 +2617,9 @@ class DeckBuilder:
             else:
                 label = ""
             rows.append((label, text))
-        hang = max(len(lb) for lb, _ in rows) * size * 0.55 / 72 + 0.15 if any(lb for lb, _ in rows) else 0.3
+        hang = max(metrics.text_width(lb, size, self.fb) for lb, _ in rows) + 0.15 if any(lb for lb, _ in rows) else 0.3
         box = self.area
-        heights = [est_lines(text, box.w - hang - 0.05, size, self.cw) * size * 1.2 / 72 + size * 0.5 / 72
+        heights = [est_lines(text, box.w - hang - 0.05, size, self.fb) * size * self.lh / 72 + size * 0.5 / 72
                    for _, text in rows]
 
         pages = [[rows[i] for i in page] for page in paginate(heights, box.h)]
@@ -2611,7 +2677,7 @@ class DeckBuilder:
         if hit and hit[0] is it:
             return hit[1], hit[2]
         spec = it[kind]  # a mapping: _prepare_item merged a steps list and its settings into one
-        lay = flows.layout(kind, spec, strip_markup, self.cw / CHAR_W["calibri"])
+        lay = flows.layout(kind, spec, strip_markup, self.fb.avg / metrics.font("Calibri").avg)
         self._flow_cache[id(it)] = (it, lay, spec)
         return lay, spec
 
