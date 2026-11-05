@@ -1,5 +1,6 @@
 """
-plots.py - academic-style figures for ppt-templated: bar, box, line, scatter and confusion matrix.
+plots.py - academic-style figures for ppt-templated: bar, box, line, scatter, histogram, heatmap,
+confusion matrix, formulas (`function`) and your own matplotlib code (`python`).
 
 ppt-templated calls render() for every `plot:` item. The figure is drawn at the exact size it gets on
 the slide, in the template's body font and theme colours, and embedded straight into the deck as
@@ -10,9 +11,13 @@ confusion matrices, error bands, trend lines and print-quality styling.
 Colour specs, accepted by every colour setting:
     accent1 ... accent6, tx1, bg1, tx2, bg2    theme slots of the template
     structure | alert | example | muted        Beamer roles (accent1 | accent2 | accent3 | grey text)
-    [accent1, 0.6]                             lightened 60% towards white (negative = darker)
+    [accent1, 0.6]                             moved 60% towards the slide background (negative = away)
     "#1F3A5F", black, tab:blue                 anything matplotlib understands
 Settings that colour several things (series, boxes, ...) take one colour or a list (cycled).
+
+`function` evaluates formulas such as "1 / (1 + exp(-x))" with a small evaluator that only knows
+arithmetic, comparisons and the maths functions in FUNCS - no Python. `python` runs Python code from
+the YAML, so it only runs when the build was started with --allow-python.
 
 All plot settings are documented in YAML_GUIDE.md (`plot`). When you add or change a setting
 or plot type here, update that guide in the same commit.
@@ -20,7 +25,11 @@ or plot type here, update that guide in the same commit.
 
 from __future__ import annotations
 
+import ast
 import io
+import logging
+import math
+import os
 
 import matplotlib
 import numpy as np
@@ -30,41 +39,64 @@ from matplotlib.colors import LinearSegmentedColormap, to_hex, to_rgb
 from matplotlib.figure import Figure
 from matplotlib.ticker import StrMethodFormatter
 
-PLOT_TYPES = ("bar", "box", "line", "scatter", "confusion")
+PLOT_TYPES = ("bar", "box", "line", "scatter", "hist", "heatmap", "confusion", "function", "python")
 COMMON_KEYS = {"type", "title", "xlabel", "ylabel", "legend", "grid", "xlim", "ylim", "xscale", "yscale",
                "xformat", "yformat", "xticks_rotation", "width", "height", "aspect", "font", "font_size", "math",
-               "caption", "alt", "dpi", "colors", "vector"}
+               "caption", "alt", "dpi", "colors", "vector", "data"}
 TYPE_KEYS = {
-    "bar": {"categories", "series", "values", "y", "errors", "value_format", "horizontal", "stacked", "bar_width",
-            "hatch"},
-    "box": {"groups", "stats", "points", "means", "notch", "whis", "fliers", "horizontal", "box_width"},
+    "bar": {"categories", "series", "values", "y", "x", "errors", "value_format", "horizontal", "stacked",
+            "bar_width", "hatch"},
+    "box": {"groups", "stats", "points", "means", "notch", "whis", "fliers", "horizontal", "box_width", "y"},
     "line": {"x", "series", "y", "values", "errors", "band_alpha", "markers", "dashes", "line_width", "marker_size"},
-    "scatter": {"series", "values", "y", "trend", "trend_label", "markers", "marker_size", "alpha"},
-    "confusion": {"labels", "matrix", "normalize", "values", "value_format", "colorbar", "square"},
+    "scatter": {"series", "values", "y", "x", "trend", "trend_label", "markers", "marker_size", "alpha"},
+    "hist": {"series", "values", "y", "bins", "density", "stacked", "alpha", "cumulative", "range"},
+    "heatmap": {"matrix", "xlabels", "ylabels", "labels", "values", "value_format", "colorbar", "square", "vmin",
+                "vmax", "center", "x", "y"},
+    "confusion": {"labels", "matrix", "normalize", "values", "value_format", "colorbar", "square", "x", "y"},
+    "function": {"f", "functions", "x", "samples", "params", "dashes", "line_width"},
+    "python": {"code", "script"},
 }
 HATCHES = ["", "//", "..", "xx", "\\\\", "oo", "++", "--"]
 MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*"]
 DASHES = ["-", "--", "-.", ":"]
-ALIASES = {"structure": "accent1", "alert": "accent2", "example": "accent3",
-           "tx1": "dk1", "bg1": "lt1", "tx2": "dk2", "bg2": "lt2"}
-SERIF_FALLBACK = ["Cambria", "Times New Roman", "STIXGeneral", "DejaVu Serif"]
+ALIASES = {"structure": "accent1", "alert": "accent2", "example": "accent3", "text": "tx1", "background": "bg1",
+           "white": "bg1"}
+SLOT_OF = {"tx1": "dk1", "bg1": "lt1", "tx2": "dk2", "bg2": "lt2"}  # when the theme has no colour map
+SERIF_FALLBACK = ["Cambria", "Caladea", "Times New Roman", "Liberation Serif", "STIXGeneral", "DejaVu Serif"]
+SANS_FALLBACK = ["Calibri", "Carlito", "Arial", "Liberation Sans", "Helvetica", "DejaVu Sans"]
+# metric-compatible open fonts (installed with LibreOffice): same widths, so labels fit the same way
+SAME_METRICS = {"calibri": "Carlito", "calibri light": "Carlito", "cambria": "Caladea", "arial": "Liberation Sans",
+                "helvetica": "Liberation Sans", "times new roman": "Liberation Serif", "courier new": "Liberation Mono",
+                "georgia": "Gelasio", "segoe ui": "Selawik", "aptos": "Carlito"}
+SANS = {"calibri", "calibri light", "carlito", "arial", "helvetica", "segoe ui", "aptos", "verdana", "tahoma",
+        "trebuchet ms", "liberation sans", "inter", "open sans", "roboto", "lato", "source sans pro", "gill sans",
+        "franklin gothic", "century gothic", "dejavu sans"}
 
 
 # ------------------------------------------------------------------------------------------
 # colours and fonts
 # ------------------------------------------------------------------------------------------
-def tint(color, amount: float) -> str:
-    """amount > 0 blends towards white, < 0 towards black (like PowerPoint's brightness)."""
-    rgb = np.array(to_rgb(color))
-    rgb = rgb + (1 - rgb) * amount if amount >= 0 else rgb * (1 + amount)
+def tint(color, amount: float, background="#FFFFFF") -> str:
+    """amount > 0 blends towards the background, < 0 away from it (towards black on a light background,
+    towards white on a dark one), like the tints of the slides themselves."""
+    rgb, bg = np.array(to_rgb(color)), np.array(to_rgb(background))
+    if amount >= 0:
+        rgb = rgb + (bg - rgb) * amount
+    else:
+        far = np.zeros(3) if bg.mean() >= 0.5 else np.ones(3)
+        rgb = rgb + (far - rgb) * -amount
     return to_hex(np.clip(rgb, 0, 1))
 
 
 class Palette:
-    """Resolves colour specs against the template's theme colours."""
+    """Resolves colour specs against the template's theme colours (tx1/bg1 as the slides use them)."""
 
     def __init__(self, theme_colors: dict):
         self.theme = {k: "#" + v for k, v in theme_colors.items()}
+        for role, slot in SLOT_OF.items():
+            if role not in self.theme and slot in self.theme:
+                self.theme[role] = self.theme[slot]
+        self.bg = self.theme.get("bg1", "#FFFFFF")
 
     @staticmethod
     def _is_tint(spec) -> bool:
@@ -76,12 +108,12 @@ class Palette:
         if spec is None:
             return None
         if self._is_tint(spec):
-            return tint(self(spec[0]), float(spec[1]))
+            return tint(self(spec[0]), float(spec[1]), self.bg)
         if isinstance(spec, str):
             if spec in ("none", "transparent"):
                 return "none"
             if spec == "muted":
-                return tint(self("tx1"), 0.45)
+                return tint(self("tx1"), 0.45, self.bg)
             key = ALIASES.get(spec, spec)
             if key in self.theme:
                 return self.theme[key]
@@ -94,17 +126,35 @@ class Palette:
         return [cols[i % len(cols)] for i in range(n)]
 
 
+def _lum(color) -> float:
+    r, g, b = to_rgb(color)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _installed(name) -> bool:
+    try:
+        font_manager.findfont(font_manager.FontProperties(family=name), fallback_to_default=False)
+        return True
+    except ValueError:
+        return False
+
+
 def pick_font(*candidates) -> str:
-    """First installed font; the fallbacks keep a serif look when the template font is missing."""
-    for name in [*candidates, *SERIF_FALLBACK]:
-        if not name:
-            continue
-        try:
-            font_manager.findfont(font_manager.FontProperties(family=name), fallback_to_default=False)
+    """First installed font of the candidates, else a metric-compatible stand-in (Carlito for Calibri, ...),
+    else a fallback of the same kind (sans for a sans template font, serif otherwise)."""
+    logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)  # "findfont: ..." for every miss
+    names = [str(c) for c in candidates if c]
+    for name in names:
+        if _installed(name):
             return name
-        except ValueError:
-            continue
-    return "DejaVu Serif"
+        alt = SAME_METRICS.get(name.lower())
+        if alt and _installed(alt):
+            return alt
+    sans = bool(names) and names[-1].lower() in SANS
+    for name in (SANS_FALLBACK if sans else SERIF_FALLBACK):
+        if _installed(name):
+            return name
+    return "DejaVu Sans" if sans else "DejaVu Serif"
 
 
 def _rc(font: str, size: float, math: str) -> dict:
@@ -137,12 +187,20 @@ def keys(kind=None) -> set:
 
 
 def render(spec: dict, theme_colors: dict, theme_font: str | None, width_in: float, height_in: float,
-           font_size: float, vector: bool = False):
-    """Draw one `plot:` item at width_in x height_in inches. Returns PNG bytes, or (PNG, SVG) with vector."""
+           font_size: float, vector: bool = False, allow_python: bool = False, base_dir: str = "."):
+    """Draw one `plot:` item at width_in x height_in inches. Returns PNG bytes, or (PNG, SVG) with vector.
+    allow_python: run the code of `type: python` plots; base_dir: folder their `script:` is relative to."""
     spec = dict(spec)  # drawing fills in defaults (e.g. confusion axis labels); keep the content untouched
     kind = spec.get("type")
     if kind not in PLOT_TYPES:
         raise ValueError(f"plot type must be one of {', '.join(PLOT_TYPES)}, got {kind!r}")
+    if kind == "python":
+        if not allow_python:
+            raise ValueError("plot type 'python' runs Python code from the YAML: build with --allow-python "
+                             "(build_deck(..., allow_python=True)) if you trust this file")
+        spec.setdefault("legend", "none")  # the code makes its own legend if it wants one
+        spec.setdefault("grid", "none")
+        spec["_base_dir"] = base_dir
     P = Palette(theme_colors)
     c = dict(spec.get("colors") or {})
     font = pick_font(spec.get("font"), theme_font)
@@ -401,13 +459,12 @@ def _confusion(fig, ax, s, c, P, size):
     im = ax.imshow(vals, cmap=cmap, vmin=0, vmax=vmax, aspect="equal" if s.get("square", True) else "auto")
     if s.get("values", True):
         fmt = s.get("value_format", "{:.0f}" if norm == "none" else "{:.2f}")
-        light, dark = P(c.get("text_light"), "bg1"), P(c.get("text_dark"), "tx1")
+        pair = sorted([P("bg1"), P("tx1")], key=_lum)  # on a dark template the text is the light one
+        light, dark = P(c.get("text_light"), pair[1]), P(c.get("text_dark"), pair[0])
         for r in range(k):
             for q in range(k):
-                rgb = cmap(vals[r, q] / vmax)[:3]
-                lum = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
                 ax.text(q, r, fmt.format(vals[r, q]), ha="center", va="center", fontsize=size * 0.9,
-                        color=light if lum < 0.5 else dark)
+                        color=light if _lum(cmap(vals[r, q] / vmax)) < 0.5 else dark)
     ax.set_xticks(range(k), labels)
     ax.set_yticks(range(k), labels)
     edge = P(c.get("cell_edge"), "bg1")
@@ -429,7 +486,226 @@ def _confusion(fig, ax, s, c, P, size):
     return 0
 
 
-DRAW = {"bar": _bar, "box": _box, "line": _line, "scatter": _scatter, "confusion": _confusion}
+# ------------------------------------------------------------------------------------------
+# histogram, heatmap
+# ------------------------------------------------------------------------------------------
+def _hist(fig, ax, s, c, P, size):
+    series = {k: np.asarray(v, float) for k, v in _series(s, "hist").items()}
+    n = len(series)
+    colors = P.cycle(c.get("series"), n, [f"accent{i}" for i in range(1, 7)])
+    stacked = bool(s.get("stacked"))
+    alpha = float(s.get("alpha", 0.9 if n == 1 or stacked else 0.6))
+    bins = s.get("bins", "auto")
+    data = [v[~np.isnan(v)] for v in series.values()]
+    if not all(len(d) for d in data):
+        raise ValueError("plot 'hist': every series needs at least one number")
+    kw = dict(bins=bins, density=bool(s.get("density")), cumulative=bool(s.get("cumulative")),
+              range=tuple(s["range"]) if s.get("range") else None, edgecolor=P(c.get("edge"), "bg1"), linewidth=0.6)
+    if stacked:
+        ax.hist(data, stacked=True, color=colors, alpha=alpha, label=[k or None for k in series], **kw)
+    else:
+        for i, (name, d) in enumerate(zip(series, data)):
+            ax.hist(d, color=colors[i], alpha=alpha, label=name or None, **kw)
+    return sum(1 for nm in series if nm)
+
+
+def _cell_texts(ax, vals, cmap, norm, fmt, size, c, P):
+    """Values in the cells, light on dark cells and dark on light ones (any template)."""
+    pair = sorted([P("bg1"), P("tx1")], key=_lum)
+    light, dark = P(c.get("text_light"), pair[1]), P(c.get("text_dark"), pair[0])
+    for r in range(vals.shape[0]):
+        for q in range(vals.shape[1]):
+            ax.text(q, r, fmt.format(vals[r, q]), ha="center", va="center", fontsize=size * 0.85,
+                    color=light if _lum(cmap(norm(vals[r, q]))) < 0.5 else dark)
+
+
+def _heatmap(fig, ax, s, c, P, size):
+    from matplotlib.colors import Normalize, TwoSlopeNorm
+    m = np.asarray(_need(s, "matrix", "heatmap"), float)
+    if m.ndim != 2:
+        raise ValueError(f"heatmap matrix must be a table of numbers (rows of equal length), got shape {m.shape}")
+    rows, cols = m.shape
+    xl = s.get("xlabels") or s.get("labels")
+    yl = s.get("ylabels") or s.get("labels")
+    for name, lab, k, what in (("xlabels", xl, cols, "columns"), ("ylabels", yl, rows, "rows")):
+        if lab is not None and len(lab) != k:
+            raise ValueError(f"heatmap {name} has {len(lab)} labels for {k} {what}")
+    vmin = float(s["vmin"]) if s.get("vmin") is not None else float(np.nanmin(m))
+    vmax = float(s["vmax"]) if s.get("vmax") is not None else float(np.nanmax(m))
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+    if s.get("center") is not None:  # diverging: alert colour below the centre, structure colour above
+        ctr = float(s["center"])
+        cmap = LinearSegmentedColormap.from_list("deck", [P(c.get("low"), "accent2"), P(c.get("mid"), "bg1"),
+                                                          P(c.get("high"), "accent1")])
+        norm = TwoSlopeNorm(vcenter=ctr, vmin=min(vmin, ctr - 1e-9), vmax=max(vmax, ctr + 1e-9))
+    else:
+        cmap = (matplotlib.colormaps[c["cmap"]] if c.get("cmap") else
+                LinearSegmentedColormap.from_list("deck", [P(c.get("low"), "bg1"), P(c.get("high"), "accent1")]))
+        norm = Normalize(vmin=vmin, vmax=vmax)
+    im = ax.imshow(m, cmap=cmap, norm=norm, aspect="equal" if s.get("square") else "auto")
+    if s.get("values", rows * cols <= 144):
+        _cell_texts(ax, m, cmap, norm, s.get("value_format", "{:.2g}"), size, c, P)
+    ax.set_xticks(range(cols), [str(x) for x in xl] if xl is not None else range(cols))
+    ax.set_yticks(range(rows), [str(x) for x in yl] if yl is not None else range(rows))
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    ax.tick_params(length=0)
+    if s.get("colorbar", True):
+        cb = fig.colorbar(im, ax=ax, fraction=0.05, pad=0.03)
+        cb.outline.set_visible(False)
+        cb.ax.tick_params(colors=P(c.get("axis"), ["tx1", 0.35]), labelcolor=P(c.get("tick"), c.get("text", "tx1")),
+                          labelsize=size * 0.8, length=2)
+    return 0
+
+
+# ------------------------------------------------------------------------------------------
+# function: formulas, evaluated safely (arithmetic and maths functions only)
+# ------------------------------------------------------------------------------------------
+def _vec(f):
+    return np.vectorize(f, otypes=[float])
+
+
+FUNCS = {
+    "sin": np.sin, "cos": np.cos, "tan": np.tan, "arcsin": np.arcsin, "asin": np.arcsin, "arccos": np.arccos,
+    "acos": np.arccos, "arctan": np.arctan, "atan": np.arctan, "arctan2": np.arctan2, "atan2": np.arctan2,
+    "sinh": np.sinh, "cosh": np.cosh, "tanh": np.tanh, "exp": np.exp, "log": np.log, "ln": np.log,
+    "log2": np.log2, "log10": np.log10, "log1p": np.log1p, "sqrt": np.sqrt, "abs": np.abs, "sign": np.sign,
+    "floor": np.floor, "ceil": np.ceil, "round": np.round, "max": np.maximum, "min": np.minimum,
+    "maximum": np.maximum, "minimum": np.minimum, "where": np.where, "clip": np.clip, "mod": np.mod,
+    "sigmoid": lambda z: 1 / (1 + np.exp(-z)), "relu": lambda z: np.maximum(z, 0),
+    "softplus": lambda z: np.logaddexp(0, z), "heaviside": lambda z: np.heaviside(z, 0.5),
+    "erf": _vec(math.erf), "gamma": _vec(math.gamma),
+    "normal": lambda z, mu=0.0, sd=1.0: np.exp(-0.5 * ((z - mu) / sd) ** 2) / (sd * np.sqrt(2 * np.pi)),
+}
+CONSTS = {"pi": np.pi, "e": np.e, "inf": np.inf, "tau": 2 * np.pi}
+_BIN = {ast.Add: np.add, ast.Sub: np.subtract, ast.Mult: np.multiply, ast.Div: np.divide, ast.Pow: np.power,
+        ast.Mod: np.mod, ast.FloorDiv: np.floor_divide}
+_CMP = {ast.Lt: np.less, ast.LtE: np.less_equal, ast.Gt: np.greater, ast.GtE: np.greater_equal,
+        ast.Eq: np.equal, ast.NotEq: np.not_equal}
+
+
+def formula(expr: str, env: dict):
+    """Value of a formula like "x^2 + 2*x" or "where(x > 0, x, 0)" for the names in env (numbers/arrays).
+    Raises ValueError for anything that is not arithmetic, a comparison or a function of FUNCS."""
+    text = str(expr)
+    if len(text) > 500:
+        raise ValueError("formula is longer than 500 characters")
+    try:  # ^ means power, as in maths (and binds as tightly as **)
+        tree = ast.parse(text.replace("^", "**"), mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"cannot read formula {text!r}: {exc.msg}") from None
+
+    def ev(n):
+        if isinstance(n, ast.Expression):
+            return ev(n.body)
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)) and not isinstance(n.value, bool):
+            return np.float64(n.value)
+        if isinstance(n, ast.Name):
+            if n.id in env:
+                return env[n.id]
+            if n.id in CONSTS:
+                return CONSTS[n.id]
+            raise ValueError(f"unknown name '{n.id}' in formula {text!r}; use x, pi, e, params or a function")
+        if isinstance(n, ast.BinOp) and type(n.op) in _BIN:
+            return _BIN[type(n.op)](ev(n.left), ev(n.right))
+        if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.USub, ast.UAdd)):
+            v = ev(n.operand)
+            return -v if isinstance(n.op, ast.USub) else v
+        if isinstance(n, ast.Compare):
+            left, out = ev(n.left), True
+            for op, right in zip(n.ops, n.comparators):
+                if type(op) not in _CMP:
+                    raise ValueError(f"comparison not allowed in formula {text!r}")
+                r = ev(right)
+                out = np.logical_and(out, _CMP[type(op)](left, r))
+                left = r
+            return out
+        if isinstance(n, ast.BoolOp):
+            vals = [ev(v) for v in n.values]
+            fn = np.logical_and if isinstance(n.op, ast.And) else np.logical_or
+            out = vals[0]
+            for v in vals[1:]:
+                out = fn(out, v)
+            return out
+        if isinstance(n, ast.IfExp):  # "x if x > 0 else 0"
+            return np.where(ev(n.test), ev(n.body), ev(n.orelse))
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and not n.keywords:
+            if n.func.id not in FUNCS:
+                raise ValueError(f"unknown function '{n.func.id}' in formula {text!r}; use one of "
+                                 f"{', '.join(sorted(FUNCS))}")
+            return FUNCS[n.func.id](*[ev(a) for a in n.args])
+        raise ValueError(f"not allowed in a formula: {ast.dump(n)[:60]} (in {text!r})")
+
+    with np.errstate(all="ignore"):
+        return ev(tree)
+
+
+def _function(fig, ax, s, c, P, size):
+    funcs = s.get("functions")
+    if funcs is None and s.get("f") is not None:
+        funcs = {"": s["f"]}
+    if not isinstance(funcs, dict) or not funcs:
+        raise ValueError("plot type 'function' needs f: 'formula in x' or functions: {label: 'formula', ...}")
+    dom = s.get("x", [-5, 5])
+    if not (isinstance(dom, (list, tuple)) and len(dom) == 2):
+        raise ValueError("plot 'function': x must be the range [from, to], e.g. x: [-6, 6]")
+    lo, hi = float(dom[0]), float(dom[1])
+    if not hi > lo:
+        raise ValueError("plot 'function': x must be [from, to] with from < to")
+    n = max(10, min(int(s.get("samples", 400)), 5000))
+    log = s.get("xscale") == "log"
+    if log and lo <= 0:
+        raise ValueError("plot 'function': a log x axis needs x values above 0")
+    x = np.geomspace(lo, hi, n) if log else np.linspace(lo, hi, n)
+    params = s.get("params") or {}
+    if not isinstance(params, dict):
+        raise ValueError("plot 'function': params must be a mapping, e.g. params: {k: 2}")
+    env = {str(k): np.float64(float(v)) for k, v in params.items()}
+    env["x"] = x
+    colors = P.cycle(c.get("series"), len(funcs), [f"accent{i}" for i in range(1, 7)])
+    lw = float(s.get("line_width", 2.0))
+    for i, (name, f) in enumerate(funcs.items()):
+        d = f if isinstance(f, dict) else {"f": f}
+        if d.get("f") is None:
+            raise ValueError(f"plot 'function': '{name}' needs a formula, e.g. {name}: 'x^2'")
+        y = np.broadcast_to(np.asarray(formula(d["f"], env), float), x.shape).copy()
+        y[~np.isfinite(y)] = np.nan
+        style = d.get("style", DASHES[i % len(DASHES)] if s.get("dashes") else "-")
+        ax.plot(x, y, color=P(d.get("color"), colors[i]), linestyle=style, linewidth=lw,
+                label=str(name) or None, zorder=3)
+    return sum(1 for nm in funcs if str(nm))
+
+
+# ------------------------------------------------------------------------------------------
+# python: your own drawing code, in the template's fonts, colours and the slide's exact size
+# ------------------------------------------------------------------------------------------
+def _python(fig, ax, s, c, P, size):
+    code, script = s.get("code"), s.get("script")
+    if bool(code) == bool(script):
+        raise ValueError("plot type 'python' needs code: | (inline) or script: file.py - one of the two")
+    name = "<plot code>"
+    if script:
+        name = str(script)
+        path = name if os.path.isabs(name) else os.path.join(s.get("_base_dir", "."), name)
+        if not os.path.exists(path):
+            raise ValueError(f"plot script not found: {script} (relative to the YAML)")
+        with open(path, encoding="utf-8") as fh:
+            code = fh.read()
+    ns = {"fig": fig, "ax": ax, "np": np, "data": s.get("data"), "size": size,
+          "colors": P.cycle(c.get("series"), 6, [f"accent{i}" for i in range(1, 7)]),
+          "color": P, "tint": lambda col, amount: tint(P(col), amount, P.bg), "__name__": "__plot__"}
+    exec(compile(str(code), name, "exec"), ns)  # noqa: S102 - only with --allow-python
+    for extra in fig.axes:  # axes the code added get the same quiet styling
+        if extra is not ax and not hasattr(extra, "_colorbar"):
+            for sp in extra.spines.values():
+                sp.set_color(P(c.get("axis"), ["tx1", 0.35]))
+            extra.tick_params(color=P(c.get("axis"), ["tx1", 0.35]), labelcolor=P(c.get("tick"), "tx1"))
+    return len(ax.get_legend_handles_labels()[1])
+
+
+DRAW = {"bar": _bar, "box": _box, "line": _line, "scatter": _scatter, "hist": _hist, "heatmap": _heatmap,
+        "confusion": _confusion, "function": _function, "python": _python}
 
 
 # ------------------------------------------------------------------------------------------
@@ -462,9 +738,9 @@ def _style(fig, ax, s, c, P, kind, n_labeled):
             t.set_rotation(float(s["xticks_rotation"]))
             t.set_ha("right")
             t.set_rotation_mode("anchor")
-    if kind != "confusion":
+    if kind not in ("confusion", "heatmap"):
         horiz = bool(s.get("horizontal"))
-        default_grid = ("x" if horiz else "y") if kind in ("bar", "box") else "both"
+        default_grid = ("x" if horiz else "y") if kind in ("bar", "box", "hist") else "both"
         grid = str(s.get("grid", default_grid)).lower()
         if grid in ("x", "y", "both"):
             ax.grid(True, axis=grid, color=P(c.get("grid"), ["tx1", 0.85]), linewidth=0.6)

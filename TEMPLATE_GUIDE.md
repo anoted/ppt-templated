@@ -19,8 +19,8 @@ ppt-templated writes only slides; everything else comes from the template, so ch
 color in PowerPoint later recolors the whole deck, and slides added by hand match the generated ones.
 
 ```
-Theme            12 colors + heading/body fonts
- └─ Slide master   background, frame-title bar, footline, text styles (bullets, sizes)
+Theme            12 colors + heading/body fonts (+ colour map: light or dark)
+ └─ Slide master   background (colour, gradient, texture or picture), frame-title bar, footline, text styles
      └─ Layouts      Title Slide, Section Header, Title and Content, ... (placeholder positions)
          └─ Slides     content only (written by ppt-templated)
 ```
@@ -44,7 +44,7 @@ Only the first slide master is used.
 
 | Slot | Role | Used for |
 |---|---|---|
-| Dark 1 (`dk1`) | text | body and table text, `muted` (lightened) |
+| Dark 1 (`dk1`) | text | body and table text, `muted` (moved towards the background) |
 | Light 1 (`lt1`) | background | slides, text on colored bars |
 | Dark 2 / Light 2 (`dk2`, `lt2`) | free | e.g. frame titles (`tx2`) or a light title bar (`bg2`) |
 | **Accent 1** | *structure* | title box, bullets, `block`, flow nodes, series 1 |
@@ -55,6 +55,14 @@ Only the first slide master is used.
 
 Make Accent 1 the main color (dark enough for white text on it), Accent 2 a warning/highlight
 color, Accent 3 a positive one.
+
+**Dark templates** use PowerPoint's own mechanism: the slide master's colour map says *Background 1 =
+Dark 1, Text 1 = Light 1* (`<p:clrMap bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" .../>`). ppt-templated
+reads the colour map, so any dark template works, including your own: it detects a dark template
+(background darker than text), makes every tint (block bodies, table stripes, flow nodes, code boxes,
+plot shading) towards the dark background instead of towards white, keeps chart and plot backgrounds
+transparent, and draws text on solid accent fills in the background colour. On a dark template the
+accents must therefore be **light enough to carry dark text** (e.g. sky blue, coral, light green).
 
 ### Text styles and sizes
 
@@ -83,15 +91,24 @@ template      templates/beamer_oxford.pptx  (13.33 x 7.50 in)
 layouts       title = 'Title Slide', section = 'Section Header', frame = 'Title and Content', ...
 title slide   placeholders: Title 1, Subtitle 2, Author, Institute, Date
 content area  x 0.60  y 1.30  w 12.13  h 5.60 in (every frame's content goes here)
+mode          light
 fonts         headings Constantia, body Cambria
 text sizes    frame title 28 pt; body levels 22 / 20 / 18 / 16 pt
-colours       dk1 #1C1C1C (text)  lt1 #FFFFFF (background)  dk2 #002147  lt2 #F0EEE8
+colours       dk1 #1C1C1C  lt1 #FFFFFF  dk2 #002147  lt2 #F0EEE8
               accent1 #002147 (structure)  accent2 #A6192E (alert)  accent3 #3D6B4F (example) ...
+              bg1 #FFFFFF (background)  tx1 #1C1C1C (text)  bg2 #F0EEE8  tx2 #002147
 footline      tokens: {author} {date} {short_title}
 ```
 
 Use its fonts and colors when you draw SVG figures, so they match the slides. Then go through the
 checklist in §5 on the contact sheets.
+
+`python ppt_templated.py --templates` lists the bundled templates (name, light/dark, look). The list
+comes from each file's properties, set by `build_template.py`: *Title* = label, *Subject* = the
+one-line description, *Category* = `light` or `dark`. A template without them is still listed, with
+its mode worked out from its colours. A bundled template is used by its short name (`template:
+midnight` = `templates/beamer_midnight.pptx`); drop your own `.pptx` into `templates/` to use it by
+name too.
 
 ---
 
@@ -101,12 +118,28 @@ checklist in §5 on the contact sheets.
 # forest.yaml
 name: forest                       # -> templates/beamer_forest.pptx
 label: Beamer Forest
-colors: {dk1: "1B1B1B", lt1: "FFFFFF", dk2: "1F3D2B", lt2: "EEF3EF", accent1: "2C5F2D",
+description: Forest green bar with a gold stripe
+colors: {text: "1B1B1B", background: "FFFFFF", text2: "1F3D2B", background2: "EEF3EF", accent1: "2C5F2D",
          accent2: "C8553D", accent3: "3E7CB1", accent4: "E0A458", accent5: "7FA99B",
          accent6: "8C8C8C", hlink: "2C5F2D", folHlink: "1F3D2B"}
 fonts: [Cambria, Calibri]          # [headings, body]
 frame: bar
 bar_stripe: accent4
+```
+
+A dark one with a texture:
+
+```yaml
+# night.yaml
+name: night
+dark: true                         # light text on a dark background
+colors: {text: "E6E6E6", background: "16181D", text2: "FFFFFF", background2: "22262E",
+         accent1: "7CC4FA", accent2: "FF8A80", accent3: "9CCC65", accent4: "FFD54F"}
+background: {texture: grain, strength: 0.7}
+frame: accent
+rule: accent1
+footline: text
+cover: left
 ```
 
 ```bash
@@ -120,10 +153,13 @@ optional except what you want to change; missing colors come from the Oxford the
 
 | Key | Default | Values |
 |---|---|---|
-| `name` | file name | Output `templates/beamer_<name>.pptx` (theme files only) |
+| `name` | file name | Output `templates/beamer_<name>.pptx` (theme files only; letters, digits, `-`, `_`) |
 | `label` | `Beamer <Name>` | Theme name shown in PowerPoint |
-| `colors` | Oxford's | The 12 slots of §1 as hex `"RRGGBB"` (quote them in YAML) |
+| `description` | – | One line shown by `ppt_templated.py --templates` |
+| `dark` | false | `true`: light text on a dark background. Give `text`/`background` (light/dark) yourself; they are stored in the slots and colour map of §1 the way PowerPoint's dark themes do it |
+| `colors` | Oxford's | The 12 slots of §1 as hex `"RRGGBB"` (quote them in YAML). `dk1`/`lt1`/`dk2`/`lt2` may be written `text`/`background`/`text2`/`background2`, and always mean those roles, also with `dark: true` |
 | `fonts` | `[Calibri, Calibri]` | `[headings, body]` |
+| `background` | `bg1` | The slide background: a theme colour (`bg2`, `[bg1, 95, 0]`) · a texture name · `{gradient: [bg1, bg2], angle: 90}` (two or more theme colours, angle in degrees) · `{texture: paper, strength: 1, ink: accent1}` · `{image: picture.jpg}` (relative to the theme file, stretched over the slide) |
 | `frame` | `bar` | Frame titles: `bar` (filled bar) \| `rule` (hairline under the title) \| `accent` (light hairline with a short accent bar) \| `plain` |
 | `bar`, `bar_text` | `accent1`, `bg1` | Bar fill and title color (`frame: bar`) |
 | `bar_stripe` | – | Thin stripe under the bar |
@@ -142,7 +178,16 @@ optional except what you want to change; missing colors come from the Oxford the
 
 **Color values** in these keys are theme references, so they follow the palette: `accent1`–`6`,
 `tx1`, `tx2`, `bg1`, `bg2`, or `[name, lumMod %, lumOff %]`: `[accent1, 75, 0]` is 25% darker,
-`[tx1, 50, 50]` a mid grey.
+`[tx1, 50, 50]` a mid grey on a light theme (on a dark theme use `[tx1, 60, 0]`). Prefer `tx1`/`bg1`
+to `dk1`/`lt1`: they follow `dark: true`.
+
+**Textures** (`background: {texture: ...}`) are drawn by `textures.py` from the theme's own colours
+with a fixed random seed (rebuilding gives the same file): `paper` (warm mottled sheet with fibres),
+`grid` (graph paper, 1/4 in), `dots` (dot grid), `lines` (ruled paper with a margin line), `chalk`
+(blackboard smudges and dust, for dark themes), `grain` (fine film grain, light or dark). `strength`
+scales the effect (0.5 subtler, 2 stronger); `ink` is the colour of lines, dots and fibres (default
+`accent1` for grid/dots/lines, else `tx1`). Keep `background` (the colour) close to the texture's
+average, since tints and text are chosen for it.
 
 **Built-in themes** (`THEMES` in `build_template.py`, same keys):
 
@@ -155,6 +200,13 @@ optional except what you want to change; missing colors come from the Oxford the
 | `blue` | Blue bar and three-part footline (Madrid) | Calibri |
 | `charcoal` | Dark slate bar, orange alerts (metropolis) | Calibri |
 | `crimson` | Light grey bar, dark red titles (Beaver) | Cambria / Calibri |
+| `minimal` | Black on white, bold titles, one red accent | Arial |
+| `parchment` | Paper texture, sepia ink, rules | Georgia / Cambria |
+| `notebook` | Graph-paper texture, ink-blue titles, red-pen rule | Calibri Light / Calibri |
+| `midnight` (dark) | Deep slate with grain, sky-blue accent bar, left-aligned covers | Calibri Light / Calibri |
+| `graphite` (dark) | Graphite bar with an orange stripe (metropolis, dark) | Calibri |
+| `aurora` (dark) | Blue-to-violet gradient, cyan structure, rounded title box | Calibri Light / Calibri |
+| `chalkboard` (dark) | Blackboard texture, chalk-white text, chalk-yellow titles | Cambria / Calibri |
 
 **Fonts:** use fonts installed wherever the deck is opened (Office fonts: Calibri, Cambria,
 Constantia, Georgia, Times New Roman, Arial...). For the **body**, pick one with lining figures
@@ -183,6 +235,8 @@ Any `.pptx`/`.potx` works; even a stock blank template gives a valid deck.
 Open a template (its preview slides are removed on every build, so leave them).
 
 - **Colors / fonts:** Design → Variants ▸ → Colors / Fonts → Customize.
+- **Background:** View → Slide Master → select the master → Background Styles → Format Background
+  (colour, gradient or picture); the layouts follow it.
 - **Master:** View → Slide Master (the top thumbnail is the master, the rest are layouts). Bar,
   stripes and footline are shapes named *Frame Title Bar*, *Frame Title Stripe/Rule/Accent*,
   *Footline Author/Title/Date/Slide Number* (Home → Arrange → Selection Pane). Fill them with
@@ -210,4 +264,6 @@ Open a template (its preview slides are removed on every build, so leave them).
 - Use **theme colors**, not custom RGB, for anything that should follow the palette.
 - Set 16:9 or 4:3 (Design → Slide Size) before designing layouts; changing it later rescales everything.
 - Background pictures belong in the master's background fill, not as a picture over the content area.
+- A dark template made by hand: set the master's colour map to *Background 1 = Dark 1* (or start from
+  `build_template.py` with `dark: true`); a dark picture over a light theme makes every tint wrong.
 - Layouts are matched by *layout* name; `Author`/`Institute`/`Date` by *placeholder* name.

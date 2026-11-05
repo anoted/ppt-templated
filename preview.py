@@ -7,8 +7,10 @@ preview.py - render a .pptx to PNG images, so a deck can be checked without open
 
 Renderer: PowerPoint through COM on Windows (exact), else LibreOffice (any OS; close, but equations
 and some effects differ). A contact sheet puts 6 numbered slides on one image for a quick look.
-With PowerPoint, the rendered layout is also measured: text that runs into another shape, out of its
-block or below the content area is reported (ppt_templated's sizes are estimates; these are not).
+The rendered layout is also measured (ppt_templated's sizes are estimates; these are not): with
+PowerPoint, text that runs into another shape, out of its block or below the content area; with
+LibreOffice (needs PyMuPDF), the text lines of the rendered PDF: text that runs into other text, out
+of the bottom of its box, below the content area or off the slide.
 """
 
 from __future__ import annotations
@@ -83,9 +85,11 @@ SOFFICE = ["soffice", "libreoffice", r"C:\Program Files\LibreOffice\program\soff
            "/Applications/LibreOffice.app/Contents/MacOS/soffice"]
 
 
-def preview(pptx: str, outdir: str | None = None, width: int = WIDTH, bottom: float | None = None):
+def preview(pptx: str, outdir: str | None = None, width: int = WIDTH, bottom: float | None = None,
+            frames=None):
     """Render every slide and the contact sheets. -> (slide PNGs, sheet PNGs, renderer name, layout
-    problems). bottom: lowest edge content may reach, in inches (default: the slide's bottom edge)."""
+    problems). bottom: lowest edge content may reach, in inches (default: the slide's bottom edge);
+    frames: numbers of the slides that bottom applies to (default: all)."""
     pptx = os.path.abspath(pptx)
     outdir = os.path.abspath(outdir or os.path.join(os.path.dirname(pptx), ".preview", Path(pptx).stem))
     os.makedirs(outdir, exist_ok=True)
@@ -94,7 +98,7 @@ def preview(pptx: str, outdir: str | None = None, width: int = WIDTH, bottom: fl
     errors = []
     for name, fn in (("PowerPoint", _powerpoint), ("LibreOffice", _libreoffice)):
         try:
-            found = fn(pptx, outdir, width, bottom)
+            found = fn(pptx, outdir, width, bottom) if fn is _powerpoint else fn(pptx, outdir, width, bottom, frames)
             slides = sorted(glob.glob(os.path.join(outdir, "slide-*.png")), key=_number)
             if found is not None and slides:
                 return slides, sheets(slides, outdir), name, found
@@ -121,6 +125,109 @@ def _problems(lines):
             out.append(f"slide {f[1]}: text runs {f[3]} pt out of the bottom of {short(f[2])}")
         elif f[0] == "bottom" and len(f) == 4:
             out.append(f"slide {f[1]}: {short(f[2])} runs {f[3]} pt below the content area")
+    return out
+
+
+def _boxes(pptx):
+    """Per slide: (text zones of the master/layout, e.g. the footline; boxes of filled text shapes on the
+    slide, with their names), in inches."""
+    from pptx import Presentation
+    from pptx.util import Emu
+
+    def box(sh):
+        return (Emu(sh.left).inches, Emu(sh.top).inches, Emu(sh.left + sh.width).inches,
+                Emu(sh.top + sh.height).inches)
+
+    def walk(shapes, group=None):
+        for sh in shapes:
+            if sh.shape_type == 6:  # groups made by ppt-templated keep their children in slide coordinates
+                yield from walk(sh.shapes, sh.name)
+            elif sh.width is not None:
+                yield sh, group
+
+    prs = Presentation(pptx)
+    out = []
+    for slide in prs.slides:
+        lay = slide.slide_layout
+        zones = []
+        sources = [lay] + ([lay.slide_master] if lay._element.get("showMasterSp") != "0" else [])
+        for src in sources:
+            for sh, _ in walk(src.shapes):
+                if not sh.is_placeholder and sh.has_text_frame and sh.text_frame.text.strip():
+                    zones.append(box(sh))
+        filled = []
+        for sh, group in walk(slide.shapes):
+            if (sh.has_text_frame and sh.shape_type == 1 and sh.text_frame.text.strip()
+                    and sh.fill.type is not None and sh.width and sh.height):  # an autoshape with a fill
+                generic = re.match(r"(Rounded Rectangle|Rectangle|TextBox|Oval|Freeform) \d+$", sh.name)
+                filled.append((box(sh), (group or sh.text_frame.text) if generic else sh.name))
+        out.append((zones, filled))
+    return out, Emu(prs.slide_width).inches
+
+
+def pdf_problems(doc, pptx, bottom=None, frames=None):
+    """Layout problems found in the text lines of the rendered PDF (a LibreOffice export of pptx)."""
+    per_slide, slide_w = _boxes(pptx)
+    out = []
+
+    def short(s):
+        s = re.sub(r"\s+", " ", s).strip()
+        return f'"{s[:45]}..."' if len(s) > 48 else f'"{s}"'
+
+    def inside(pt, b, pad=0.02):
+        return b[0] - pad <= pt[0] <= b[2] + pad and b[1] - pad <= pt[1] <= b[3] + pad
+
+    for n, page in enumerate(doc, 1):
+        if n > len(per_slide):
+            break
+        zones, filled = per_slide[n - 1]
+        k = slide_w / page.rect.width  # inches per PDF point
+        lines = []
+        for bi, blk in enumerate(page.get_text("dict").get("blocks", [])):
+            for ln in blk.get("lines", []):
+                text = "".join(sp.get("text", "") for sp in ln.get("spans", []))
+                if not text.strip():
+                    continue
+                x0, y0, x1, y1 = (v * k for v in ln["bbox"])
+                c = ((x0 + x1) / 2, (y0 + y1) / 2)
+                if any(inside(c, z) for z in zones):
+                    continue  # footline, slide number, decorations of the template
+                lines.append((bi, text, (x0, y0, x1, y1)))
+        found = set()
+        if bottom and (frames is None or n in frames):
+            worst = max(((ln[2][3] - bottom, ln) for ln in lines), default=(0, None), key=lambda t: t[0])
+            if worst[1] is not None and worst[0] > 0.05:
+                out.append(f"slide {n}: {short(worst[1][1])} runs {worst[0] * 72:.0f} pt below the content area")
+        for _, text, b in lines:
+            if b[2] > slide_w + 0.02 or b[0] < -0.02:
+                out.append(f"slide {n}: {short(text)} runs off the side of the slide")
+                break
+        for (bx, name) in filled:  # text that runs out of the bottom of a block, card, node, code box
+            over = max((ln[2][3] - bx[3] for ln in lines
+                        if bx[0] <= (ln[2][0] + ln[2][2]) / 2 <= bx[2] and bx[1] <= ln[2][1] < bx[3]), default=0)
+            if over > 0.04 and name not in found:
+                found.add(name)
+                out.append(f"slide {n}: text runs {over * 72:.0f} pt out of the bottom of {short(name)}")
+        hits = 0
+        for i in range(len(lines)):
+            for j in range(i + 1, len(lines)):
+                (bi, ti, a), (bj, tj, b) = lines[i], lines[j]
+                if bi == bj:
+                    continue
+                ox = min(a[2], b[2]) - max(a[0], b[0])
+                oy = min(a[3], b[3]) - max(a[1], b[1])
+                small = min((a[3] - a[1]), (b[3] - b[1]))
+                if ox > 0.03 and oy > 0.35 * small and oy * 72 > 2:
+                    key = (ti.strip(), tj.strip())
+                    if key in found:
+                        continue
+                    found.add(key)
+                    out.append(f"slide {n}: {short(ti)} runs into {short(tj)} ({oy * 72:.0f} pt)")
+                    hits += 1
+                    if hits >= 5:
+                        break
+            if hits >= 5:
+                break
     return out
 
 
@@ -177,8 +284,9 @@ def _powerpoint(pptx, outdir, width, bottom):
     return _problems(r.stdout.splitlines())
 
 
-def _libreoffice(pptx, outdir, width, bottom):
-    """Export through LibreOffice -> [] (no layout measurements), or None without LibreOffice."""
+def _libreoffice(pptx, outdir, width, bottom, frames=None):
+    """Export through LibreOffice -> layout problems measured in the PDF (needs PyMuPDF, else []),
+    or None without LibreOffice."""
     exe = next((p for p in (c if os.path.isabs(c) else shutil.which(c) for c in SOFFICE) if p and os.path.exists(p)), None)
     if not exe:
         return None
@@ -202,7 +310,10 @@ def _libreoffice(pptx, outdir, width, bottom):
                 for i, page in enumerate(doc, 1):
                     z = width / page.rect.width
                     page.get_pixmap(matrix=pymupdf.Matrix(z, z)).save(os.path.join(outdir, f"slide-{i:02d}.png"))
-            return []
+                try:
+                    return pdf_problems(doc, pptx, bottom, frames)
+                except Exception:  # noqa: BLE001 - measuring is a bonus; the images are what was asked for
+                    return []
         if shutil.which("pdftoppm"):
             subprocess.run(["pdftoppm", "-png", "-scale-to-x", str(width), "-scale-to-y", "-1", pdf,
                             os.path.join(work, "p")], check=True, capture_output=True, timeout=900)

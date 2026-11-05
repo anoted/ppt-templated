@@ -10,13 +10,14 @@ at the exact size the figure gets on the slide, so nothing has to be converted b
     .pdf                        one page (default 1) converted to SVG + PNG with PyMuPDF
 
 PowerPoint 2019 / Microsoft 365 draws the SVG; older versions, LibreOffice and Google Slides show the
-PNG. SVG fallbacks are rendered with headless Chrome/Edge (or cairosvg) and cached in .ppt-cache/
+PNG. SVG fallbacks are rendered with headless Chrome/Edge (or cairosvg, or PyMuPDF) and cached in .ppt-cache/
 next to the YAML, keyed by file content and pixel size, so rebuilding is fast.
 """
 
 from __future__ import annotations
 
 import base64
+import glob
 import hashlib
 import io
 import mimetypes
@@ -125,7 +126,8 @@ def png_fallback(m: Media, w_in: float, h_in: float, cache_dir: str | None) -> b
     if cached and os.path.exists(cached):
         with open(cached, "rb") as fh:
             return fh.read()
-    png = _pdf_png(m, w_px, h_px) if m.page else (_browser_png(m.data, w_px, h_px) or _cairo_png(m.data, w_px, h_px))
+    png = _pdf_png(m, w_px, h_px) if m.page else (_browser_png(m.data, w_px, h_px) or _cairo_png(m.data, w_px, h_px)
+                                                  or _mupdf_png(m.data, w_px, h_px))
     if png and cached:
         os.makedirs(cache_dir, exist_ok=True)
         with open(cached, "wb") as fh:
@@ -200,10 +202,29 @@ def _sized(svg: bytes, w_px: int, h_px: int) -> bytes:
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 
+BROWSER_TIMEOUT = 30          # seconds for one SVG screenshot; a browser that hangs is not tried again
+_BROKEN: set = set()          # browsers that failed in this run
+
+
+def _playwright_shells() -> list:
+    """Playwright's chrome-headless-shell builds: made for exactly this job, and fast to start."""
+    roots = [os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "", "/opt/pw-browsers",
+             os.path.expanduser("~/.cache/ms-playwright"), os.path.expanduser("~/Library/Caches/ms-playwright"),
+             os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")]
+    found = []
+    for root in roots:
+        if root and os.path.isdir(root):
+            for exe in ("chrome-headless-shell", "chrome-headless-shell.exe"):
+                found += sorted(glob.glob(os.path.join(root, "chromium_headless_shell-*", "*", exe)), reverse=True)
+    return found
+
+
 def find_browser() -> str | None:
-    for c in BROWSERS:
-        p = c if os.path.isabs(c) else shutil.which(c)
-        if p and os.path.exists(p):
+    """A Chromium-based browser for SVG fallbacks: $PPT_TEMPLATED_BROWSER, a Playwright headless shell,
+    then Chrome / Edge / Chromium. None if there is none (or every one failed in this run)."""
+    for c in [os.environ.get("PPT_TEMPLATED_BROWSER") or "", *_playwright_shells(), *BROWSERS]:
+        p = c if os.path.isabs(c) else (shutil.which(c) if c else None)
+        if p and os.path.exists(p) and p not in _BROKEN:
             return p
     return None
 
@@ -218,14 +239,21 @@ def _browser_png(svg: bytes, w_px: int, h_px: int) -> bytes | None:
         with open(src, "wb") as fh:
             fh.write(_sized(svg, w_px, h_px))
         # a private profile keeps headless Chrome from handing the job to a running browser
-        cmd = [exe, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
+        cmd = [exe, "--disable-gpu", "--hide-scrollbars", "--no-first-run",
                "--no-default-browser-check", f"--user-data-dir={os.path.join(work, 'profile')}",
                "--force-device-scale-factor=1", "--default-background-color=00000000",
                f"--window-size={w_px},{h_px}", f"--screenshot={out}", "file:///" + src.replace("\\", "/").lstrip("/")]
+        if "headless" not in os.path.basename(exe).lower():  # a headless shell is headless anyway
+            cmd.insert(1, "--headless=new")
         if sys.platform.startswith("linux") and hasattr(os, "geteuid") and os.geteuid() == 0:
             cmd.insert(1, "--no-sandbox")
-        subprocess.run(cmd, capture_output=True, timeout=120)
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=BROWSER_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            _BROKEN.add(exe)  # e.g. a full Chrome waiting for a display or D-Bus in a container
+            return None
         if not os.path.exists(out):
+            _BROKEN.add(exe)
             return None
         with Image.open(out) as im:
             if im.size != (w_px, h_px):
@@ -237,6 +265,18 @@ def _browser_png(svg: bytes, w_px: int, h_px: int) -> bytes | None:
         return None
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _mupdf_png(svg: bytes, w_px: int, h_px: int) -> bytes | None:
+    """SVG -> PNG with PyMuPDF (no browser needed; most SVG features, fonts may differ slightly)."""
+    try:
+        pymupdf = _pymupdf()
+        with pymupdf.open(stream=svg, filetype="svg") as doc:
+            pg = doc[0]
+            pix = pg.get_pixmap(matrix=pymupdf.Matrix(w_px / pg.rect.width, h_px / pg.rect.height), alpha=True)
+            return pix.tobytes("png")
+    except Exception:  # noqa: BLE001 - not installed, or an SVG MuPDF cannot read
+        return None
 
 
 def _cairo_png(svg: bytes, w_px: int, h_px: int) -> bytes | None:

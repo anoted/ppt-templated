@@ -19,8 +19,10 @@ import math
 import re
 from dataclasses import dataclass, field
 
-CHAR = 0.55        # average character width (em); a little generous, so text never overflows its shape
+CHAR = 0.55        # average character width (em) of Calibri-like fonts; a little generous, so text fits
 CHAR_BOLD = 0.6
+SLACK = 0.25       # extra width per node (em): words of wide letters ("Measure") need more than the average
+_scale = 1.0       # character width of the template's font relative to Calibri (set by layout())
 LINE = 1.2         # line height (em)
 LABEL = 0.8        # edge and group label size, relative to the node text
 STUB = 0.9         # shortest straight piece where a connector leaves or enters a shape (em)
@@ -166,11 +168,21 @@ class Layout:
 # ------------------------------------------------------------------------------------------
 # entry point
 # ------------------------------------------------------------------------------------------
-def layout(kind: str, spec: dict, visible) -> Layout:
-    """kind: 'flow' or 'steps'. visible(text) -> the text as displayed (markup removed)."""
-    if kind == "steps":
-        return _steps(spec, visible)
-    return _flow(spec, visible)
+def layout(kind: str, spec: dict, visible, char_scale: float = 1.0) -> Layout:
+    """kind: 'flow' or 'steps'. visible(text) -> the text as displayed (markup removed). char_scale: how much
+    wider the template's font is than Calibri (Arial ~1.1), so boxes are sized for the real text."""
+    global _scale
+    _scale = max(1.0, float(char_scale))
+    try:
+        if kind == "steps":
+            return _steps(spec, visible)
+        return _flow(spec, visible)
+    finally:
+        _scale = 1.0
+
+
+def _cw(bold=False) -> float:
+    return (CHAR_BOLD if bold else CHAR) * _scale
 
 
 def shape_name(name) -> str:
@@ -217,7 +229,7 @@ def _block(text: str, limit: float, cw: float):
 def _size(n: Node, wrap: float, visible) -> None:
     _, (fx, fy), (px, py), _ = SHAPES[n.shape]
     text = visible(n.text)
-    cw = CHAR_BOLD if n.bold else CHAR
+    cw = _cw(n.bold)
     limit = wrap
     if n.shape in ("decision", "circle", "ellipse"):  # wrap into a compact block, not one long line
         aspect = 2.2 if n.shape == "decision" else 1.6
@@ -225,7 +237,7 @@ def _size(n: Node, wrap: float, visible) -> None:
         limit = min(wrap, max(longest, math.sqrt(len(text) * cw * LINE * aspect)))
     tw, th = _block(text, limit, cw)
     n.pad = (px, py)
-    n.w = (tw + 2 * px) / fx
+    n.w = (tw + SLACK + 2 * px) / fx
     n.h = (th + 2 * py) / fy
     if n.shape not in ("text", "circle", "ellipse", "decision"):
         n.w = max(n.w, 3.5)
@@ -350,7 +362,7 @@ def _flow(spec: dict, visible) -> Layout:
     if not nodes:
         raise ValueError("flow needs 'nodes' (or 'edges' that name them)")
     groups = _parse_groups(spec.get("groups"), byid)
-    wrap = float(spec.get("wrap", 18)) * CHAR
+    wrap = float(spec.get("wrap", 18)) * _cw()
     gap = float(spec.get("gap", 1.0))
     for n in nodes:
         _size(n, wrap, visible)
@@ -430,7 +442,7 @@ def _flow(spec: dict, visible) -> Layout:
     labels = {}
     for e in edges:
         if e.label:
-            lw, lh = _block(visible(e.label), 16 * CHAR, CHAR)
+            lw, lh = _block(visible(e.label), 16 * _cw(), _cw())
             labels[id(e)] = (lw * LABEL, lh * LABEL)
     gap_main = {r: 2.4 * gap for r in ranks}
     gap_cross = 1.3 * gap
@@ -687,13 +699,13 @@ def _steps(spec: dict, visible) -> Layout:
     if shape != "chevron":  # any flow shape: a linear flow with arrows
         flow = {k: v for k, v in spec.items() if k in ("direction", "wrap", "gap", "uniform")}
         return _flow({**flow, "nodes": nodes, "shape": shape}, visible)
-    wrap = float(spec.get("wrap", 14)) * CHAR
+    wrap = float(spec.get("wrap", 14)) * _cw()
     out = []
     for i, nd in enumerate(nodes):
         n = Node(nd["id"], nd["text"], "pentagon" if i == 0 else "chevron", nd["color"], nd["style"],
                  nd["text_color"], nd["bold"], index=i, rank=i)
-        cw = CHAR_BOLD if n.bold else CHAR
-        n.w, n.h = _block(visible(n.text), wrap, cw)  # text block for now
+        n.w, n.h = _block(visible(n.text), wrap, _cw(n.bold))  # text block for now
+        n.w += SLACK
         out.append(n)
     px, py = SHAPES["chevron"][2]
     h = max(n.h for n in out) + 2 * py

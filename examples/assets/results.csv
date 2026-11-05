@@ -1,0 +1,5 @@
+Model,Params,Accuracy,Latency (ms)
+Baseline,12M,81.4,14
+Wide,48M,84.9,31
+Deep,33M,85.1,27
+Ours,20M,86.2,17
