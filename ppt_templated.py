@@ -382,6 +382,17 @@ def copy_body_style(prs, text_frame) -> None:
         txBody.insert(1, new)
 
 
+def whole(v, what: str) -> int:
+    """v as a whole number, or a ValueError that names the setting."""
+    try:
+        f = float(v)
+        if f != int(f):
+            raise ValueError
+        return int(f)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{what} must be a whole number, got {v!r}") from None
+
+
 def item_kinds(content) -> list:
     """Item names of a content list, without checking it (for reports)."""
     out = []
@@ -768,6 +779,9 @@ class DeckBuilder:
         self.slides_spec = content.get("slides", []) or []
         if not isinstance(self.meta, dict) or not isinstance(self.slides_spec, list):
             raise SystemExit("error: the YAML needs `meta:` (a mapping) and `slides:` (a list)")
+        self.meta = {k: v for k, v in self.meta.items() if v is not None}  # `key:` with no value = not given
+        self.slides_spec = [{k: v for k, v in s.items() if not (k == "title" and v is None)}
+                            if isinstance(s, dict) else s for s in self.slides_spec]
         self.base_dir = base_dir
         self.warnings, self._where = [], "meta"
         self.problems = []                    # [{"slide": n or None, "message": ...}] for --json
@@ -797,7 +811,7 @@ class DeckBuilder:
         self.area = self._content_area()
         self.math_jobs = []       # (latex, display, run-properties element)
         self.valign = self.meta.get("valign", "center")
-        self.sections = [s.get("title", "") for s in self.slides_spec
+        self.sections = [s.get("title") or "" for s in self.slides_spec
                          if isinstance(s, dict) and s.get("layout") == "section"]
         self.section_no = 0
         self.substitute_tokens = substitute_tokens
@@ -858,8 +872,8 @@ class DeckBuilder:
                 "date": self.meta["date"],
             })
         cp = self.prs.core_properties
-        cp.title, cp.author = str(m.get("title", "")), str(m.get("author", ""))
-        cp.subject, cp.keywords, cp.category = str(m.get("subtitle", "")), "", ""  # not the template's own
+        cp.title, cp.author = str(m.get("title") or ""), str(m.get("author") or "")
+        cp.subject, cp.keywords, cp.category = str(m.get("subtitle") or ""), "", ""  # not the template's own
 
         for i, spec in enumerate(self.slides_spec, 1):
             if not isinstance(spec, dict):
@@ -968,7 +982,7 @@ class DeckBuilder:
             self._apply_timing(slide, spec.get("transition", self.meta.get("transition")))
             title = spec.get("title") or (spec.get("text") if kind == "statement" else "")
             self.slide_info.append({
-                "slide": len(self.slide_info) + 1, "layout": kind, "title": strip_markup(str(title or "")),
+                "slide": self.prs.slides.index(slide) + 1, "layout": kind, "title": strip_markup(str(title or "")),
                 "items": item_kinds(spec.get("content")) if kind in ("frame", "plain") else [],
                 "fill": None if self._fill_info is None or k else round(self._fill_info[0], 2),
                 "text_scale": None if self._fill_info is None or k else self._fill_info[1],
@@ -1458,7 +1472,7 @@ class DeckBuilder:
         """Writes paragraphs; returns [(first_para, last_para), ...] per top-level item."""
         groups = []
         tf.clear()
-        start = int(opts.get("start") or 1)
+        start = whole(opts.get("start") or 1, "numbered start") if numbered else 1
         last = start + sum(1 for lvl, _ in paras if lvl == 0) - 1
         hang = None
         if numbered and last >= 10:  # "10." needs a wider hanging indent than the master's bullets
@@ -1618,9 +1632,9 @@ class DeckBuilder:
         htf.margin_top = htf.margin_bottom = inch(0.02)
         hp = htf.paragraphs[0]
         hp.alignment = PP_ALIGN.LEFT
-        self._add_runs(hp, str(spec.get("title", "")), {"size": size * 1.05, "color": "white", "bold": True})
+        self._add_runs(hp, str(spec.get("title") or ""), {"size": size * 1.05, "color": "white", "bold": True})
         grp = slide.shapes.add_group_shape([body, head])
-        grp.name = f"{kind.capitalize()}: {strip_markup(spec.get('title', ''))[:40]}"
+        grp.name = f"{kind.capitalize()}: {strip_markup(spec.get('title') or '')[:40]}"
         self._animate(it, grp, "group")
 
     # ---- code ---------------------------------------------------------------------------
@@ -2155,7 +2169,8 @@ class DeckBuilder:
                           "- shrunk to fit instead")
             return [spec]
         kind, it = items[0]
-        box, opts = self.area, {k: v for k, v in it.items() if k != kind}
+        # only known settings go on: the original slide already reported the rest
+        box, opts = self.area, {k: v for k, v in it.items() if k in SETTINGS[kind] | ITEM_OPTS}
         if kind == "table":
             t = it["table"]
             _, _, width, colw, heights = self._table_geometry(t, box.w, 1.0)
@@ -2167,7 +2182,8 @@ class DeckBuilder:
             rows = list(t.get("rows") or [])
             contents = []
             for k, page in enumerate(pages):
-                tk = {**t, "rows": [rows[i] for i in page], "widths": colw, "width": min(1.0, width / box.w)}
+                tk = {**{k: v for k, v in t.items() if k in SETTINGS["table"]}, "rows": [rows[i] for i in page],
+                      "widths": colw, "width": min(1.0, width / box.w)}
                 if k < len(pages) - 1:
                     tk.pop("caption", None)  # the caption goes under the last part
                 contents.append({"table": tk, **opts})
@@ -2182,7 +2198,7 @@ class DeckBuilder:
             if (sum(heights) + 0.12) * 0.9 <= box.h:
                 return [spec]
             pages = paginate(heights, box.h - 0.17)
-            start, contents = int(it.get("start") or 1), []
+            start, contents = whole(it.get("start") or 1, "numbered start") if kind == "numbered" else 1, []
             for page in pages:
                 item = {kind: [e for i in page for e in groups[i]], **opts}
                 if kind == "numbered":
@@ -2247,6 +2263,8 @@ class DeckBuilder:
         try:
             m = self._media({"path": path})
             h = float(v.get("height", 0.45))
+            if not 0.05 <= h <= 3:
+                raise ValueError(f"height must be between 0.05 and 3 inches, got {h:g}")
         except (ValueError, TypeError) as exc:
             raise SystemExit(f"error: meta.logo: {exc}") from None
         w = min(h * m.ratio, 2.2)
@@ -2335,7 +2353,8 @@ class DeckBuilder:
         for e in raw:
             if isinstance(e, dict) and len(e) == 1 and next(iter(e)) not in keys:  # - 2019: Founded
                 (k, v), = e.items()
-                e = {"date": k, "text": v} if kind == "timeline" else {"title": k, "text": v}
+                head = {"date": k} if kind == "timeline" else {"title": k}
+                e = {**head, **v} if isinstance(v, dict) else {**head, "text": v}
             elif not isinstance(e, dict):
                 e = str(e)
                 if kind == "timeline" and ": " in e:
@@ -2367,7 +2386,7 @@ class DeckBuilder:
         y = b.y + max(0.0, (b.h - h) / 2)
         line_y = y + dh + 0.12 + dot / 2
         hl = tl.get("highlight")
-        hl = set(hl if isinstance(hl, list) else [hl]) if hl is not None else set()
+        hl = {whole(x, "timeline highlight") for x in (hl if isinstance(hl, list) else [hl])} if hl is not None else set()
         base = tl.get("color", "structure")
         line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, inch(b.x + slot / 2), inch(line_y - 0.02),
                                       inch(max(0.04, slot * (len(entries) - 1))), inch(0.04))
@@ -2430,7 +2449,7 @@ class DeckBuilder:
             self._check("cards entry", e, {"title", "text", "bullets", "color"})
         n = len(entries)
         cols = c.get("columns")
-        cols = int(cols) if cols else (n if n <= 4 else 3 if n in (5, 6, 9) else 4)
+        cols = whole(cols, "cards columns") if cols else (n if n <= 4 else 3 if n in (5, 6, 9) else 4)
         cols = max(1, min(cols, n))
         gap = 0.3
         cw = (w - gap * (cols - 1)) / cols
@@ -3060,8 +3079,11 @@ def new_content_file(path: str, template: str | None = None) -> str:
     """Write a starter content file (refuses to overwrite)."""
     if os.path.exists(path):
         raise SystemExit(f"error: {path} already exists - choose another name")
+    folder = os.path.dirname(os.path.abspath(path))
     if template:
-        find_template(template, os.path.dirname(os.path.abspath(path)), from_cli=True)  # fails early
+        found = find_template(template, folder, from_cli=True)  # fails early on a wrong name
+        if os.path.splitext(os.path.basename(str(template)))[0] != str(template):  # a path, not a name
+            template = os.path.relpath(os.path.abspath(found), folder).replace(os.sep, "/")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(STARTER.format(name=os.path.basename(path), template=template or "oxford"))
     return path
@@ -3157,6 +3179,9 @@ def main(argv=None):
                 print(json.dumps({"ok": False, "error": exc.code.removeprefix("error: ")}, indent=2))
                 sys.exit(1)
             raise
+        except Exception as exc:  # noqa: BLE001 - e.g. a template python-pptx cannot read
+            print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, indent=2))
+            sys.exit(1)
     else:
         _main_build(a)
 

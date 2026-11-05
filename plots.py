@@ -527,9 +527,9 @@ def _heatmap(fig, ax, s, c, P, size):
     rows, cols = m.shape
     xl = s.get("xlabels") or s.get("labels")
     yl = s.get("ylabels") or s.get("labels")
-    for name, lab, k in (("xlabels", xl, cols), ("ylabels", yl, rows)):
+    for name, lab, k, what in (("xlabels", xl, cols, "columns"), ("ylabels", yl, rows, "rows")):
         if lab is not None and len(lab) != k:
-            raise ValueError(f"heatmap {name} has {len(lab)} labels for {k} {'columns' if k == cols else 'rows'}")
+            raise ValueError(f"heatmap {name} has {len(lab)} labels for {k} {what}")
     vmin = float(s["vmin"]) if s.get("vmin") is not None else float(np.nanmin(m))
     vmax = float(s["vmax"]) if s.get("vmax") is not None else float(np.nanmax(m))
     if vmax <= vmin:

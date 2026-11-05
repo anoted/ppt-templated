@@ -350,6 +350,8 @@ def _check_background(bg, fail, base_dir):
         path = path if os.path.isabs(path) else os.path.join(base_dir, path)
         if not os.path.exists(path):
             fail(f"background image not found: {bg['image']} (relative to the theme file)")
+        if os.path.splitext(path)[1].lower() not in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff"):
+            fail("background image must be a PNG, JPEG, GIF, BMP or TIFF picture")
         bg["image"] = path
     return bg
 

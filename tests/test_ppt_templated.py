@@ -272,6 +272,35 @@ class CommandLine(unittest.TestCase):
         self.assertGreaterEqual(len(json.loads(out)), 14)
 
 
+def _have_libreoffice():
+    import importlib.util
+    import shutil
+    if importlib.util.find_spec("pymupdf") is None and importlib.util.find_spec("fitz") is None:
+        return False
+    return bool(shutil.which("soffice") or shutil.which("libreoffice"))
+
+
+@unittest.skipUnless(_have_libreoffice(), "needs LibreOffice and PyMuPDF")
+class Measuring(unittest.TestCase):
+    def test_overflow_is_measured_in_the_rendered_slides(self):
+        long = " ".join(["WWWWWWWW"] * 16)
+        content = {"meta": {"template": "blue"}, "slides": [
+            {"title": "Overflow", "content": [{"columns": [[{"block": {"title": "A", "text": long, "size": 26}}],
+                                                           [{"block": {"title": "B", "text": "short"}}]]}]},
+            {"title": "Fine", "content": [["one", "two"]]}]}
+        tmp = tempfile.mkdtemp(prefix="ppt_test_")
+        path = os.path.join(tmp, "deck.yaml")
+        with open(path, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(content, fh)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            pt.main([path, "--preview", "--json"])
+        rep = json.loads(out.getvalue())
+        measured = [w for w in rep["warnings"] if "(measured)" in w["message"]]
+        self.assertTrue(any(w["slide"] == 1 and "Block: A" in w["message"] for w in measured), rep["warnings"])
+        self.assertFalse(any(w["slide"] == 2 for w in measured), rep["warnings"])
+
+
 class ThemeFiles(unittest.TestCase):
     def test_validation(self):
         bad = [

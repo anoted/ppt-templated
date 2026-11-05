@@ -134,13 +134,13 @@ def _boxes(pptx):
     from pptx import Presentation
     from pptx.util import Emu
 
-    def box(sh, dx=0, dy=0):
-        return (Emu(sh.left + dx).inches, Emu(sh.top + dy).inches, Emu(sh.left + dx + sh.width).inches,
-                Emu(sh.top + dy + sh.height).inches)
+    def box(sh):
+        return (Emu(sh.left).inches, Emu(sh.top).inches, Emu(sh.left + sh.width).inches,
+                Emu(sh.top + sh.height).inches)
 
     def walk(shapes, group=None):
         for sh in shapes:
-            if sh.shape_type == 6:  # group: children use the group's own coordinate space
+            if sh.shape_type == 6:  # groups made by ppt-templated keep their children in slide coordinates
                 yield from walk(sh.shapes, sh.name)
             elif sh.width is not None:
                 yield sh, group

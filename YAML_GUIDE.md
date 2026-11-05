@@ -146,7 +146,7 @@ Top level: `meta` (mapping) and `slides` (list of mappings). A slide is a mappin
 | `outline_title` | `Outline` | Title of those outline slides |
 | `layouts` | standard names | Map the keys `title`, `section`, `frame`, `columns`, `title_only`, `plain` to your template's layout names (a name or a list to try in order), see [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md) |
 | `overflow` | `shrink` | `shrink` \| `split`: what a frame whose content is **one** `bullets`/`numbered` list or **one** `table` does when it does not fit. `split` continues it on as many slides as needed, titled `Title (1/3)` ..., with the table header repeated and numbering running on. A slide's own `overflow` wins |
-| `logo` | – | A picture (SVG/PNG/...) on the title, section, outline, frame and references slides: `logo: assets/logo.svg` or `{path, dark, position, height}`. `dark`: the picture to use on dark templates; `position`: `top-right` (default) \| `top-left` \| `bottom-right` \| `bottom-left`; `height`: 0.45 in (1.5× on the title slide). On frames it is centred on the title band and the title is narrowed to end before it |
+| `logo` | – | A picture (SVG/PNG/...) on the title, section, outline, frame and references slides: `logo: assets/logo.svg` or `{path, dark, position, height}`. `dark`: the picture to use on dark templates; `position`: `top-right` (default) \| `top-left` \| `bottom-right` \| `bottom-left`; `height`: 0.45 in (0.05 to 3; 1.5× on the title slide). On frames it is centred on the title band and the title is narrowed to end before it |
 
 **Templates** (`--templates` prints this list; every content file works with every one of them):
 
@@ -989,6 +989,7 @@ Errors stop the build and name the slide (`error: slide 7 "Results": ...`); warn
 | `unknown name / function '...' in formula` | §8.2 `function` lists what formulas may use |
 | `statement needs text` · `quote needs text` · `timeline/cards needs a list` | Give the item its text or list |
 | `meta.logo ...` | A path (relative to the YAML), or `{path, dark, position, height}` |
+| `... must be a whole number, got ...` | `start`, `columns`, `highlight` take whole numbers |
 | `unknown chart type` · `plot type must be one of ...` · `unknown flow shape` | See §6.10, §8, §9.3 |
 | `bar series 'A' has 3 values for 4 categories` | Match `categories` |
 | `flow edge needs two node ids, like 'a -> b'` · `flow node id(s) used twice` | Fix the edge string / ids |

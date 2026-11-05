@@ -132,6 +132,12 @@ def apply(kind: str, spec: dict, base_dir: str) -> dict:
         return out
 
     ptype = str(out.get("type", "column" if kind == "chart" else "")).lower()
+    if kind == "plot" and ptype == "function":
+        raise ValueError("plot type 'function' draws formulas; it does not read data files")
+    if kind == "plot" and ptype == "python":  # the code gets the whole file
+        out["data"] = {"header": header, "rows": rows,
+                       "columns": {h: [r[j] for r in rows] for j, h in enumerate(header)}}
+        return out
     xname = out.get("x") if isinstance(out.get("x"), (str, int)) and not isinstance(out.get("x"), bool) else None
     xj = _col(header, xname, file, "x") if xname is not None else 0
     ynames = out.get("y")
@@ -145,7 +151,13 @@ def apply(kind: str, spec: dict, base_dir: str) -> dict:
         if kind == "plot" and ptype in ("box", "hist") and _is_numeric(rows, xj):
             yj = [j for j in range(len(header)) if _is_numeric(rows, j)]  # every numeric column is a sample
     if not yj:
-        raise ValueError(f"{file}: no numeric columns to draw (columns: {', '.join(header)})")
+        hint = ""
+        for j in (j for j in range(len(header)) if j != xj):  # point at the cell that spoils a column
+            bad = next(((i, r[j]) for i, r in enumerate(rows) if r[j] != "" and number(r[j]) is None), None)
+            if bad and sum(number(r[j]) is not None for r in rows) >= len(rows) / 2:
+                hint = f"; column '{header[j]}' has text in row {bad[0] + 2}: '{bad[1]}'"
+                break
+        raise ValueError(f"{file}: no numeric columns to draw (columns: {', '.join(header)}){hint}")
     for key in ("x", "y"):  # column names are used up here; drawing must not see them as data
         if (key == "x" and xname is not None) or (key == "y" and ynames is not None):
             out.pop(key, None)
@@ -191,10 +203,6 @@ def apply(kind: str, spec: dict, base_dir: str) -> dict:
         else:
             out.setdefault("xlabels", list(series))
             out.setdefault("ylabels", labels)
-    elif ptype == "function":
-        raise ValueError("plot type 'function' draws formulas; it does not read data files")
-    elif ptype == "python":
-        out["data"] = {"header": header, "rows": rows, "columns": {h: [r[j] for r in rows] for j, h in enumerate(header)}}
     else:
         raise ValueError(f"{file}: plot type {ptype!r} cannot read a data file")
     return out
