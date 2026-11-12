@@ -7,3 +7,5 @@ project_*/
 book_*/
 .preview/
 .ppt-cache/
+topics*/
+generated/
