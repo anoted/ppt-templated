@@ -13,6 +13,10 @@ meta:
   template: ../templates/beamer_blue.pptx    # try beamer_modern.pptx or beamer_crimson.pptx
   output: example_deck.pptx                  # relative to this file
   transition: fade                           # default slide transition (optional)
+  # One-word changes to the look, without another template (YAML_GUIDE.md section 4):
+  # fonts: palatino                          # another font set: palatino, garamond, gill, latex, mono, ...
+  # accent: teal                             # another structure colour; made readable automatically
+  # density: compact                         # body text 12% smaller (airy: larger)
   # section_style: outline                   # uncomment: Beamer-style outline at every section
 
 slides:
@@ -146,6 +150,17 @@ slides:
           caption: "Contour plots have no native PowerPoint form, so they come in as images."
           alt: Contour plot of a two-peak surface
         animate: fade
+
+  # A figure and its text are just two items: they are placed side by side automatically, the figure
+  # on the side it was written on. No columns, no widths. (`arrange: stack` on the slide would keep
+  # them one under the other.)
+  - title: A figure and its text arrange themselves
+    content:
+      - image: {path: assets/attention.svg, alt: Attention weights between tokens}
+      - bullets:
+          - Write the figure, then the text
+          - They go side by side when that makes the figure larger
+          - A wide, low figure stays above its text
 
   - title: SVG figures and figure rows
     content:

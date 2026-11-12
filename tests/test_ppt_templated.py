@@ -58,7 +58,8 @@ class Templates(unittest.TestCase):
             with self.subTest(template=name), contextlib.redirect_stderr(io.StringIO()):
                 builder, prs, _ = pt._build(os.path.join(HERE, "examples", "example.yaml"), template=name, check=True)
                 self.assertGreater(len(prs.slides), 20)
-                self.assertEqual([w for w in builder.warnings if "measured" not in w], [], name)
+                self.assertEqual([w for w in builder.warnings if "measured" not in w and "not installed" not in w],
+                                 [], name)
 
     def test_names_resolve_and_mode_is_detected(self):
         self.assertTrue(pt.find_template("midnight").endswith("beamer_midnight.pptx"))

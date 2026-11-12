@@ -6,16 +6,18 @@ build_template.py - generate Beamer-inspired PowerPoint templates.
     python build_template.py --theme blue            # just one
     python build_template.py --spec my_theme.yaml    # a theme from a file (same keys as THEMES)
     python build_template.py --list                  # the built-in themes
+    python build_template.py --gallery               # templates/gallery.jpg: one slide in every template
 
 Each template is a normal .pptx whose slide master and layouts carry all the formatting:
   * theme colours  (accent1 = structure, accent2 = alert, accent3 = example, accent4-6 = charts),
                    light or dark (`dark: true` maps the colours the way PowerPoint's own dark themes do)
-  * theme fonts    (headings / body)
+  * theme fonts    (headings / body), the font of `code`, the body text size
   * a background   (theme colour, gradient, generated texture such as paper or chalk, or a picture)
   * layouts with the standard PowerPoint names ppt_templated.py looks for:
       Title Slide, Section Header, Title and Content, Two Content, Title Only, Blank
   * a Beamer "footline" (author | short title | date + slide number) whose text uses tokens
     such as {author} that ppt_templated.py fills in.
+  * optionally the sections of the talk on every frame (`nav`): a strip above the title, or a sidebar.
 
 You can also open the result in PowerPoint (View > Slide Master) and restyle it by hand -
 see TEMPLATE_GUIDE.md, which lists every theme key.
@@ -209,6 +211,188 @@ THEMES = {
         "cover": "left", "cover_text": "tx1",
         "bullets": [("–", 100), ("•", 100), ("–", 100)],
     },
+    # ---- more academic typefaces that come with Office ---------------------------------------------
+    "palatino": {  # book typography: Palatino, forest green, hairline rules
+        "label": "Palatino (book serif, forest green)",
+        "colors": dict(text="1E1E1E", background="FFFFFF", text2="1B4332", background2="EEF3EE",
+                       accent1="1F5A44", accent2="B03A2E", accent3="2A6F97", accent4="C8963E", accent5="6B8FB3",
+                       accent6="8A8A8A", hlink="1F5A44", folHlink="2A6F97"),
+        "fonts": ("Palatino Linotype", "Palatino Linotype"),
+        "frame": "rule", "title_color": "accent1", "rule": "accent1",
+        "footline": "text", "foot_rule": ("tx1", 50, 50),
+        "cover": "rules", "cover_text": "accent1", "subtitle_italic": True,
+        "bullets": [("•", 100), ("–", 100), ("•", 100)],
+    },
+    "garamond": {  # humanities: Garamond on warm white, burgundy, centred and quiet
+        "label": "Garamond (humanities, burgundy)",
+        "colors": dict(text="2A2420", background="FFFDF8", text2="5E1622", background2="F3EEE4",
+                       accent1="7B1E2B", accent2="C2571A", accent3="3F6B4C", accent4="B8963E", accent5="4F6D8F",
+                       accent6="8C857B", hlink="7B1E2B", folHlink="4F6D8F"),
+        "fonts": ("Garamond", "Garamond"), "size": 24,  # Garamond runs small: one size up
+        "frame": "plain", "title_color": "accent1",
+        "footline": "text",
+        "cover": "plain", "cover_text": "accent1", "subtitle_italic": True,
+        "bullets": [("•", 100), ("–", 100), ("•", 100)],
+    },
+    "schoolbook": {  # textbook / lecture notes: Century Schoolbook, pale title bar, steel blue
+        "label": "Schoolbook (textbook serif, steel blue)",
+        "colors": dict(text="1C2026", background="FFFFFF", text2="143A54", background2="E8EEF3",
+                       accent1="1B4F72", accent2="C0392B", accent3="1E8449", accent4="D4A017", accent5="5D8AA8",
+                       accent6="85929E", hlink="1B4F72", folHlink="5B2C6F"),
+        "fonts": ("Century Schoolbook", "Century Schoolbook"), "size": 20,  # a wide face: one size down
+        "bar": "bg2", "bar_text": "accent1",
+        "foot": ["accent1", ("bg2", 90, 0), "bg2"], "foot_text": ["bg1", "tx1", "tx1"],
+        "radius": 0,
+        "bullets": [("■", 60), ("–", 100), ("•", 100)],
+    },
+    "gill": {  # humanist sans: Gill Sans, deep teal bar
+        "label": "Gill (humanist sans, deep teal)",
+        "colors": dict(text="1D2A2C", background="FFFFFF", text2="0B3C40", background2="EAF1F1",
+                       accent1="0F5257", accent2="D1495B", accent3="3A7D44", accent4="E3A72F", accent5="5C7FB8",
+                       accent6="88949A", hlink="0F5257", folHlink="5C7FB8"),
+        "fonts": ("Gill Sans MT", "Gill Sans MT"),
+        "bar": "accent1", "bar_text": "bg1",
+        "footline": "text",
+        "cover": "left", "cover_text": "accent1",
+        "bullets": [("•", 100), ("–", 100), ("•", 100)],
+    },
+    "franklin": {  # life sciences / medicine: Franklin Gothic, maroon bar, three-part footline
+        "label": "Franklin (gothic sans, maroon)",
+        "colors": dict(text="1F1F1F", background="FFFFFF", text2="5C1029", background2="F3ECEE",
+                       accent1="8C1D40", accent2="E07A1F", accent3="2E7D5B", accent4="F2B134", accent5="4C78A8",
+                       accent6="8E8E8E", hlink="8C1D40", folHlink="4C78A8"),
+        "fonts": ("Franklin Gothic Medium", "Franklin Gothic Book"),
+        "bar": "accent1", "bar_text": "bg1",
+        "foot": [("accent1", 50, 0), ("accent1", 75, 0), "accent1"], "foot_text": ["bg1", "bg1", "bg1"],
+        "radius": 0,
+        "bullets": [("■", 60), ("–", 100), ("•", 100)],
+    },
+    "nordic": {  # light and airy: Segoe UI, slate blue, hairline under the title
+        "label": "Nordic (Segoe UI, slate blue)",
+        "colors": dict(text="2B303B", background="FFFFFF", text2="26324A", background2="EEF1F6",
+                       accent1="3B5B92", accent2="C8553D", accent3="3E8E6B", accent4="E0A93B", accent5="7A6FB0",
+                       accent6="8B93A1", hlink="3B5B92", folHlink="7A6FB0"),
+        "fonts": ("Segoe UI Light", "Segoe UI"), "size": 20,  # Segoe UI runs wide: one size down
+        "frame": "rule", "title_color": "tx2", "rule": ("bg1", 85, 0),
+        "footline": "text",
+        "cover": "left", "cover_text": "tx2",
+        "bullets": [("•", 100), ("–", 100), ("•", 100)],
+    },
+    # ---- Beamer structures: the sections of the talk shown on every frame --------------------------
+    "berlin": {  # Beamer Berlin / Frankfurt: a strip of section names above the title bar
+        "label": "Berlin (section strip above the title, indigo)",
+        "colors": dict(text="1E1E2A", background="FFFFFF", text2="1D2A57", background2="E9ECF5",
+                       accent1="2C3E73", accent2="C8102E", accent3="2E7D4F", accent4="E3A21A", accent5="5E8BC4",
+                       accent6="8B8FA3", hlink="2C3E73", folHlink="6A3DB8"),
+        "fonts": ("Calibri", "Calibri"),
+        "nav": "top", "nav_fill": ("accent1", 60, 0), "nav_text": "bg1",
+        "bar": "accent1", "bar_text": "bg1",
+        "foot": [("accent1", 60, 0), ("accent1", 80, 0), "accent1"], "foot_text": ["bg1", "bg1", "bg1"],
+        "radius": 0,
+    },
+    "berkeley": {  # Beamer Berkeley / PaloAlto: a sidebar with the sections, title bar on top
+        "label": "Berkeley (section sidebar, blue and gold)",
+        "colors": dict(text="1C1C1C", background="FFFFFF", text2="0B3D66", background2="E8EEF4",
+                       accent1="0B3D66", accent2="B5341F", accent3="2E7D4F", accent4="E0A526", accent5="5B8DB8",
+                       accent6="8A8F98", hlink="0B3D66", folHlink="5B2C6F"),
+        "fonts": ("Cambria", "Calibri"),
+        "nav": "side", "nav_fill": "accent1", "nav_text": "bg1",
+        "bar": ("accent1", 75, 0), "bar_text": "bg1", "bar_stripe": "accent4",
+        "footline": "text",
+        "radius": 0,
+        "bullets": [("■", 60), ("–", 100), ("•", 100)],
+    },
+    # ---- open fonts (python fonts.py --install): LaTeX's own typefaces and other open academic faces -
+    "latex": {  # what LaTeX Beamer really looks like: Latin Modern Sans, blue structure, no bars
+        "label": "LaTeX (Beamer default with Latin Modern Sans)",
+        "colors": dict(dk1="000000", lt1="FFFFFF", dk2="1A1A5E", lt2="EBEBF7", accent1="3333B3",
+                       accent2="C00000", accent3="1B7A1B", accent4="E69F00", accent5="3E9BD6",
+                       accent6="7A7A8C", hlink="3333B3", folHlink="6A3DB8"),
+        "fonts": ("LM Sans 10", "LM Sans 10"), "mono": "LM Mono 10",
+        "frame": "plain", "title_color": "accent1",
+        "footline": "text",
+        "cover": "plain", "cover_text": "accent1",
+    },
+    "article": {  # a LaTeX paper on slides: Latin Modern Roman, black rules, dark blue structure
+        "label": "Article (LaTeX paper look, Latin Modern Roman)",
+        "colors": dict(text="111111", background="FFFFFF", text2="14213D", background2="F0F0EC",
+                       accent1="1F3A93", accent2="A4161A", accent3="2D6A4F", accent4="B5892E", accent5="577590",
+                       accent6="808080", hlink="1F3A93", folHlink="5A3E85"),
+        "fonts": ("LM Roman 10", "LM Roman 10"), "mono": "LM Mono 10",
+        "frame": "rule", "title_color": "tx1", "rule": "tx1", "title_bold": True,
+        "footline": "text", "foot_rule": ("tx1", 50, 50),
+        "cover": "rules", "cover_text": "tx1", "subtitle_italic": True,
+        "bullets": [("•", 100), ("–", 100), ("•", 100)],
+    },
+    "metropolis": {  # the Metropolis Beamer theme as designed: Fira Sans, dark teal bar, orange alerts
+        "label": "Metropolis (Fira Sans, as the Beamer theme)",
+        "colors": dict(text="23373B", background="FAFAFA", text2="23373B", background2="E9ECEC",
+                       accent1="23373B", accent2="EB811B", accent3="14B03D", accent4="4A8FA3", accent5="A3B6BA",
+                       accent6="B8860B", hlink="EB811B", folHlink="B5651D"),
+        "fonts": ("Fira Sans", "Fira Sans"), "mono": "Fira Mono", "size": 20,  # a wide face: one size down
+        "bar": "accent1", "bar_text": "bg1",
+        "footline": "text",
+        "cover": "left", "cover_text": "tx1",
+        "radius": 0,
+        "bullets": [("•", 100), ("–", 100), ("•", 100)],
+    },
+    "source": {  # modern journal: Source Serif headings over Source Sans text, ink blue
+        "label": "Source (Source Serif and Source Sans, ink blue)",
+        "colors": dict(text="1F2328", background="FFFFFF", text2="14406B", background2="EEF2F6",
+                       accent1="14406B", accent2="D64933", accent3="2A9D8F", accent4="E9B44C", accent5="7B6FB0",
+                       accent6="8B949E", hlink="14406B", folHlink="7B6FB0"),
+        "fonts": ("Source Serif 4", "Source Sans 3"), "mono": "Source Code Pro",
+        "frame": "rule", "title_color": "tx2", "rule": "accent1",
+        "footline": "text",
+        "cover": "left", "cover_text": "tx2",
+        "bullets": [("•", 100), ("–", 100), ("•", 100)],
+    },
+    "stix": {  # physics and engineering journals: STIX Two, petrol bar, three-part footline
+        "label": "STIX (science-journal serif, petrol)",
+        "colors": dict(text="1A1A1A", background="FFFFFF", text2="083D54", background2="E8F0F3",
+                       accent1="0B4F6C", accent2="C1121F", accent3="2D6A4F", accent4="E0A100", accent5="6C8EAD",
+                       accent6="8A8A8A", hlink="0B4F6C", folHlink="5B2C6F"),
+        "fonts": ("STIX Two Text", "STIX Two Text"),
+        "bar": "accent1", "bar_text": "bg1",
+        "foot": [("accent1", 50, 0), ("accent1", 75, 0), "accent1"], "foot_text": ["bg1", "bg1", "bg1"],
+        "radius": 0, "subtitle_italic": True,
+        "bullets": [("■", 60), ("–", 100), ("•", 100)],
+    },
+    # ---- console and code-editor looks (open coding fonts) -----------------------------------------
+    "terminal": {  # a terminal window: everything monospaced, phosphor green on near-black, amber alerts
+        "label": "Terminal (dark, monospace, green on black)",
+        "dark": True,
+        "colors": dict(text="D5E0D7", background="0B0F0C", text2="4AE168", background2="161D18",
+                       accent1="4AE168", accent2="FFB000", accent3="58A6FF", accent4="F778BA", accent5="BC8CFF",
+                       accent6="8B949E", hlink="58A6FF", folHlink="BC8CFF"),
+        "fonts": ("JetBrains Mono", "JetBrains Mono"), "mono": "JetBrains Mono", "size": 18,  # monospace is wide
+        "frame": "rule", "title_color": "tx2", "rule": ("bg1", 75, 25), "title_bold": True,
+        "footline": "text",
+        "cover": "left", "cover_text": "tx2",
+        "bullets": [(">", 100), ("-", 100), ("·", 100)],
+    },
+    "console": {  # technical documentation: monospaced headings over a clean sans, one blue accent
+        "label": "Console (IBM Plex, monospace headings)",
+        "colors": dict(text="161616", background="FFFFFF", text2="161616", background2="F2F4F8",
+                       accent1="0F62FE", accent2="DA1E28", accent3="198038", accent4="F1C21B", accent5="8A3FFC",
+                       accent6="8D8D8D", hlink="0F62FE", folHlink="8A3FFC"),
+        "fonts": ("IBM Plex Mono", "IBM Plex Sans"), "mono": "IBM Plex Mono", "size": 20,
+        "frame": "rule", "title_color": "tx1", "rule": "accent1",
+        "footline": "text",
+        "cover": "left", "cover_text": "tx1",
+        "bullets": [("▪", 100), ("–", 100), ("·", 100)],
+    },
+    "solarized": {  # the Solarized light editor palette: cream page, coding-font headings
+        "label": "Solarized (light editor palette, Source Code Pro)",
+        "colors": dict(text="2F4A53", background="FDF6E3", text2="073642", background2="EEE8D5",
+                       accent1="1B6FAE", accent2="DC322F", accent3="5F7400", accent4="B58900", accent5="6C71C4",
+                       accent6="839496", hlink="1B6FAE", folHlink="6C71C4"),
+        "fonts": ("Source Code Pro", "Source Sans 3"), "mono": "Source Code Pro",
+        "frame": "rule", "title_color": "tx2", "rule": ("bg1", 85, 0),
+        "footline": "text",
+        "cover": "left", "cover_text": "tx2",
+        "bullets": [("▪", 100), ("–", 100), ("·", 100)],
+    },
 }
 DESCRIPTIONS = {  # one line each for `--list` and `ppt_templated.py --templates`
     "blue": "Blue title bar and three-part footline (Beamer Madrid)",
@@ -225,15 +409,32 @@ DESCRIPTIONS = {  # one line each for `--list` and `ppt_templated.py --templates
     "parchment": "Paper texture, sepia ink, Georgia / Cambria",
     "notebook": "Graph-paper background, ink-blue structure, red-pen alerts",
     "minimal": "Black on white, bold titles, a single red accent, Arial",
+    "palatino": "Book look: hairline rules, forest green, Palatino Linotype",
+    "garamond": "Humanities: warm white, burgundy titles, no bars, Garamond",
+    "schoolbook": "Textbook: pale title bar, steel blue, Century Schoolbook",
+    "gill": "Deep teal title bar, left-aligned covers, Gill Sans MT",
+    "franklin": "Maroon title bar and three-part footline, Franklin Gothic",
+    "nordic": "White, hairline under titles, slate blue, Segoe UI Light / Segoe UI",
+    "berlin": "Section names in a strip above the indigo title bar (Beamer Berlin), Calibri",
+    "berkeley": "Sidebar with the section names, blue and gold (Beamer Berkeley), Cambria / Calibri",
+    "latex": "Real Beamer default look: Latin Modern Sans, blue titles, no bars (open font)",
+    "article": "LaTeX-paper look: Latin Modern Roman, black rules (open font)",
+    "metropolis": "Beamer Metropolis as designed: Fira Sans, dark teal bar, orange alerts (open font)",
+    "source": "Modern journal: Source Serif 4 headings, Source Sans 3 text, ink blue (open fonts)",
+    "stix": "Science-journal serif STIX Two, petrol title bar, three-part footline (open font)",
+    "terminal": "Terminal window: all monospace, green on near-black, amber alerts, JetBrains Mono (open font)",
+    "console": "Monospace headings over a clean sans, IBM blue, IBM Plex Mono / Sans (open fonts)",
+    "solarized": "Solarized light editor palette, Source Code Pro headings, Source Sans 3 (open fonts)",
 }
 # Style keys (all optional; the defaults give the Madrid look of "blue"). TEMPLATE_GUIDE.md explains them.
 DEFAULTS = {"fonts": ("Calibri", "Calibri"), "bar": "accent1", "bar_text": "bg1",
             "foot": ["accent1", "accent1", "accent1"], "foot_text": ["bg1", "bg1", "bg1"]}
 CHOICES = {"frame": ("bar", "rule", "plain"), "footline": ("boxes", "text"),
-           "cover": ("box", "rules", "left", "plain")}
+           "cover": ("box", "rules", "left", "plain"), "nav": ("top", "side")}
 THEME_KEYS = {"label", "description", "dark", "colors", "fonts", "background", "bar", "bar_text", "bar_stripe",
               "frame", "title_color", "rule", "footline", "foot", "foot_text", "foot_rule", "foot_stripe", "cover",
-              "cover_text", "radius", "bullets", "bullet_color", "title_bold", "subtitle_italic"}
+              "cover_text", "radius", "bullets", "bullet_color", "title_bold", "subtitle_italic", "mono", "size",
+              "nav", "nav_fill", "nav_text"}
 SLOTS = ("dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
          "hlink", "folHlink")
 ROLE_NAMES = {"text": "dk1", "background": "lt1", "text2": "dk2", "background2": "lt2"}  # theme-file aliases
@@ -249,6 +450,20 @@ FOOT_Y = H - FOOT_H
 COL_W = (BODY[2] - 0.4) / 2
 RULE = 0.014    # hairline (~1 pt)
 STRIPE = 0.05   # accent stripe under the bar / above the footline
+NAV_H = 0.3     # nav: top - height of the strip of section names above the frame title
+SIDE_W = 1.9    # nav: side - width of the sidebar with the section names
+MONO = "Consolas"  # font of `code` when a theme names none (comes with Office on Windows and Mac)
+
+
+def geometry(t) -> dict:
+    """Where things go on a frame (inches): the frame is moved down by a section strip (nav: top) or
+    to the right by a sidebar (nav: side); everything else follows from these boxes."""
+    top = NAV_H if t.get("nav") == "top" else 0.0
+    left = SIDE_W if t.get("nav") == "side" else 0.0
+    body = (BODY[0] + left, BODY[1] + top, BODY[2] - left, BODY[3] - top)
+    return {"top": top, "left": left, "body": body, "col_w": (body[2] - 0.4) / 2,
+            "bar": (left, top, W - left, BAR_H), "bar_bottom": top + BAR_H,
+            "title": (TITLE[0] + left, TITLE[1] + top, TITLE[2] - left, TITLE[3])}
 
 
 def is_ref(v) -> bool:
@@ -296,8 +511,16 @@ def check_theme(t: dict, name: str, base_dir: str = HERE) -> dict:
     for k, ok in CHOICES.items():
         if t.get(k) is not None and t[k] not in ok:
             fail(f"{k} must be one of {', '.join(ok)}, got {t[k]!r}")
+    if not isinstance(t.get("mono", MONO), str) or not t.get("mono", MONO).strip():
+        fail("mono must be a font name, e.g. Consolas")
+    size = t.get("size", 22)
+    if isinstance(size, bool) or not isinstance(size, (int, float)) or not 14 <= size <= 32:
+        fail("size (body text, pt) must be a number from 14 to 32")
+    if t.get("nav"):
+        t.setdefault("nav_fill", "accent1")
+        t.setdefault("nav_text", "bg1")
     for k in ("bar", "bar_text", "bar_stripe", "title_color", "rule", "foot_rule", "foot_stripe", "cover_text",
-              "bullet_color"):
+              "bullet_color", "nav_fill", "nav_text"):
         if t.get(k) is not None and not is_ref(t[k]):
             fail(f"{k}: {t[k]!r} is not a theme colour (accent1-6, tx1, tx2, bg1, bg2, "
                  f"or [name, lumMod %, lumOff %])")
@@ -412,31 +635,49 @@ def shape(sid, name, box, *, fill=None, geom="rect", adj="", text="", size=1100,
             f'<a:p><a:pPr algn="{align}"/>{run}<a:endParaRPr lang="en-US" sz="{size}"/></a:p></p:txBody></p:sp>')
 
 
-def footline(t, start_id):
-    """Beamer footline: author | short title | date  n."""
-    seg = W / 3
+def footline(t, start_id, left=0.0):
+    """Beamer footline: author | short title | date  n. left: where it starts (right of a sidebar)."""
+    seg = (W - left) / 3
     parts = []
     names = ["Footline Author", "Footline Title", "Footline Date"]
     texts = ["{author}", "{short_title}", "{date}"]
     if t.get("footline", "boxes") == "text":  # quiet grey line of text, optional hairline above
         color, margin = grey(t), BODY[0]
         if t.get("foot_rule"):
-            parts.append(shape(start_id + 4, "Footline Rule", (margin, FOOT_Y, W - 2 * margin, RULE),
+            parts.append(shape(start_id + 4, "Footline Rule", (left + margin, FOOT_Y, W - left - 2 * margin, RULE),
                                fill=t["foot_rule"]))
         for i, align in enumerate(["l", "ctr", "ctr"]):
-            parts.append(shape(start_id + i, names[i], (seg * i, FOOT_Y, seg, FOOT_H), text=texts[i],
+            parts.append(shape(start_id + i, names[i], (left + seg * i, FOOT_Y, seg, FOOT_H), text=texts[i],
                                size=1000, color=color, align=align, lins=margin if i == 0 else 0.1))
         parts.append(shape(start_id + 3, "Footline Slide Number", (W - margin - 0.85, FOOT_Y, 0.85, FOOT_H),
                            field=True, size=1000, color=color, align="r", lins=0))
         return "".join(parts)
     if t.get("foot_stripe"):
-        parts.append(shape(start_id + 4, "Footline Stripe", (0, FOOT_Y - STRIPE, W, STRIPE), fill=t["foot_stripe"]))
+        parts.append(shape(start_id + 4, "Footline Stripe", (left, FOOT_Y - STRIPE, W - left, STRIPE),
+                           fill=t["foot_stripe"]))
     for i in range(3):
-        parts.append(shape(start_id + i, names[i], (seg * i, FOOT_Y, seg + (0.01 if i < 2 else 0), FOOT_H),
+        parts.append(shape(start_id + i, names[i], (left + seg * i, FOOT_Y, seg + (0.01 if i < 2 else 0), FOOT_H),
                            fill=t["foot"][i], text=texts[i], size=1100, color=t["foot_text"][i]))
     parts.append(shape(start_id + 3, "Footline Slide Number", (W - 1.0, FOOT_Y, 0.85, FOOT_H),
                        field=True, size=1100, color=t["foot_text"][2], align="r", lins=0))
     return "".join(parts)
+
+
+def navigation(t, g) -> str:
+    """The shapes of `nav`: a strip above the title or a sidebar. The shape named "Section Navigation"
+    holds the token {sections}; ppt_templated.py writes the section names there on every frame, in this
+    shape's text size and colour, with the current section in full colour."""
+    nav = t.get("nav")
+    if nav == "top":
+        return shape(17, "Section Navigation", (0, 0, W, NAV_H), fill=t["nav_fill"], text="{sections}", size=1000,
+                     color=t["nav_text"], align="l", lins=g["body"][0])
+    if nav == "side":
+        return (shape(17, "Sidebar", (0, 0, SIDE_W, H), fill=t["nav_fill"])
+                + shape(18, "Sidebar Title", (0, 0, SIDE_W, BAR_H), text="{short_title}", size=1200,
+                        color=t["nav_text"], align="l", bold=True, lins=0.18)
+                + shape(19, "Section Navigation", (0, BAR_H + 0.35, SIDE_W, H - BAR_H - 0.8), text="{sections}",
+                        size=1100, color=t["nav_text"], align="l", lins=0.18))
+    return ""
 
 
 def ph(sid, name, ph_attrs, box, *, lst="", body_pr="", prompt="", geom=None, fill=None, levels=1,
@@ -499,19 +740,23 @@ def build(t, out_path):
     theme_part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
     # ---- 2. Slide master: frame-title bar, footline, title + body placeholders ------------
-    title_ph = ph(2, "Title Placeholder 1", 'type="title"', TITLE, prompt="Click to edit Master title style",
+    g = geometry(t)
+    title_ph = ph(2, "Title Placeholder 1", 'type="title"', g["title"], prompt="Click to edit Master title style",
                   body_pr='vert="horz" lIns="91440" tIns="0" rIns="91440" bIns="0" rtlCol="0" anchor="ctr"', autofit=True)
-    body_ph = ph(3, "Text Placeholder 2", 'type="body" idx="1"', BODY, levels=5,
+    body_ph = ph(3, "Text Placeholder 2", 'type="body" idx="1"', g["body"], levels=5,
                  body_pr='vert="horz" lIns="91440" tIns="45720" rIns="91440" bIns="45720" rtlCol="0" anchor="ctr"', autofit=True)
     frame = t.get("frame", "bar")
     deco = ""
     if frame == "bar":
-        deco = shape(10, "Frame Title Bar", (0, 0, W, BAR_H), fill=t["bar"])
+        deco = shape(10, "Frame Title Bar", g["bar"], fill=t["bar"])
         if t.get("bar_stripe"):
-            deco += shape(16, "Frame Title Stripe", (0, BAR_H, W, STRIPE), fill=t["bar_stripe"])
+            deco += shape(16, "Frame Title Stripe", (g["left"], g["bar_bottom"], W - g["left"], STRIPE),
+                          fill=t["bar_stripe"])
     elif frame == "rule":
-        deco = shape(10, "Frame Title Rule", (BODY[0], BAR_H - 0.03, BODY[2], RULE), fill=t.get("rule", "tx1"))
-    master_tree = tree(deco + footline(t, 11) + title_ph + body_ph, "", background_xml(t, master))
+        deco = shape(10, "Frame Title Rule", (g["body"][0], g["bar_bottom"] - 0.03, g["body"][2], RULE),
+                     fill=t.get("rule", "tx1"))
+    deco += navigation(t, g)
+    master_tree = tree(deco + footline(t, 11, g["left"]) + title_ph + body_ph, "", background_xml(t, master))
     mel = master._element
     mel.replace(mel.find(qn("p:cSld")), parse_xml(master_tree))
     if t.get("dark"):  # PowerPoint's own dark themes: background 1 = dark 1, text 1 = light 1
@@ -532,6 +777,8 @@ def build(t, out_path):
     body_levels = [(0.34, 0.34, 22, "►", 70, 10), (0.74, 0.3, 20, "•", 100, 4), (1.1, 0.28, 18, "–", 100, 3),
                    (1.45, 0.26, 16, "•", 100, 2), (1.8, 0.26, 16, "–", 100, 2), (2.15, 0.26, 16, "•", 100, 2),
                    (2.5, 0.26, 16, "•", 100, 2), (2.85, 0.26, 16, "•", 100, 2), (3.2, 0.26, 16, "•", 100, 2)]
+    k = t.get("size", 22) / 22  # `size`: body text of the first level (pt); the other levels keep their ratio
+    body_levels = [(m, i, max(12, round(sz * k)), ch, pct, sp) for m, i, sz, ch, pct, sp in body_levels]
     if t.get("bullets"):
         bl = t["bullets"]
         body_levels = [(m, i, s, *bl[k % len(bl)], sp) for k, (m, i, s, _, _, sp) in enumerate(body_levels)]
@@ -600,12 +847,13 @@ def build(t, out_path):
         + ph(3, "Section Subtitle", 'type="body" idx="1"', (sx, S["sub"], sw, 0.6), prompt="Optional subtitle",
              lst=lvl(1, 2000, "accent1", al, *no_bu, sub_attrs), body_pr=f'{pad}anchor="t"')
         + footline(t, 20))
-    frame_title = ph(2, "Title 1", 'type="title"', TITLE, prompt="Frame Title")
-    content = frame_title + ph(3, "Content Placeholder 2", 'idx="1"', BODY, levels=3, body_pr='anchor="ctr"')
+    frame_title = ph(2, "Title 1", 'type="title"', g["title"], prompt="Frame Title")
+    bx, by, bw, bh = g["body"]
+    content = frame_title + ph(3, "Content Placeholder 2", 'idx="1"', g["body"], levels=3, body_pr='anchor="ctr"')
     two = (frame_title
-           + ph(3, "Content Placeholder Left", 'sz="half" idx="1"', (BODY[0], BODY[1], COL_W, BODY[3]), levels=2,
+           + ph(3, "Content Placeholder Left", 'sz="half" idx="1"', (bx, by, g["col_w"], bh), levels=2,
                 body_pr='anchor="ctr"')
-           + ph(4, "Content Placeholder Right", 'sz="half" idx="2"', (BODY[0] + COL_W + 0.4, BODY[1], COL_W, BODY[3]),
+           + ph(4, "Content Placeholder Right", 'sz="half" idx="2"', (bx + g["col_w"] + 0.4, by, g["col_w"], bh),
                 levels=2, body_pr='anchor="ctr"'))
     specs = {
         "Title Slide": (title_slide, False), "Section Header": (section, False),
@@ -633,7 +881,9 @@ def set_catalog(prs, t):
     cp.subject = str(t.get("description") or "")
     cp.category = "dark" if t.get("dark") else "light"
     bg = t["background"]
-    cp.keywords = "template " + next((f"{k} {bg[k]}" for k in ("texture", "gradient", "image") if k in bg), "plain")
+    # read back by ppt_templated.py (template_settings): the font of `code`
+    cp.keywords = ("template " + next((f"{k} {bg[k]}" for k in ("texture", "gradient", "image") if k in bg), "plain")
+                   + f"; mono={t.get('mono', MONO)}")
 
 
 def background_xml(t, master) -> str:
@@ -686,6 +936,58 @@ DEMO = {
 }
 
 
+GALLERY = {  # one slide that shows a template's fonts, colours, blocks, chart and section navigation
+    "meta": {"title": "Gallery", "author": "ppt-templated", "short_title": "Gallery"},
+    "slides": [
+        {"layout": "section", "title": "Method"},
+        {"layout": "section", "title": "Results"},
+        {"title": "Results at a glance", "content": [{"columns": [
+            [{"bullets": ["Content in YAML, looks from the template", "Code such as `fit(x)` has its own font"]},
+             {"block": {"title": "Method", "text": "Positions and sizes are worked out for you."}},
+             {"alertblock": {"title": "Caveat", "text": "Sample numbers."}}],
+            [{"chart": {"type": "column", "categories": ["A", "B", "C"],
+                        "series": {"Base": [3, 4, 3.5], "Ours": [4, 5.2, 4.6]}}}]]}]},
+        {"layout": "section", "title": "Outlook"},
+    ],
+}
+
+
+def gallery(out_path, names=None, cols=5, tile=620):
+    """Render the GALLERY slide with every bundled template (needs PowerPoint or LibreOffice) and tile
+    the pictures, each with its name, into one image: templates/gallery.jpg."""
+    import tempfile
+    from PIL import Image, ImageDraw, ImageFont
+    import ppt_templated
+    import preview
+    known = ppt_templated.template_names()
+    order = [n for n in THEMES if n in known] + [n for n in known if n not in THEMES]
+    names = [n for n in (names or order) if n in known]
+    tmp, shots = tempfile.mkdtemp(prefix="ppt_gallery_"), []
+    for name in names:
+        deck = os.path.join(tmp, f"{name}.pptx")
+        prs = ppt_templated.DeckBuilder(copy.deepcopy(GALLERY), known[name], tmp).build()
+        prs.save(deck)
+        slides = preview.preview(deck, os.path.join(tmp, name))[0]
+        shots.append((name, Image.open(slides[2]).convert("RGB")))
+        print("rendered", name)
+    try:
+        font = ImageFont.truetype("calibri.ttf", 30)
+    except OSError:
+        font = ImageFont.load_default()
+    th = round(tile * shots[0][1].height / shots[0][1].width)
+    pad, label = 12, 48
+    rows = -(-len(shots) // cols)
+    sheet = Image.new("RGB", (cols * (tile + pad) + pad, rows * (th + label + pad) + pad), "#F2F2F2")
+    draw = ImageDraw.Draw(sheet)
+    for i, (name, im) in enumerate(shots):
+        x, y = pad + (i % cols) * (tile + pad), pad + (i // cols) * (th + label + pad)
+        sheet.paste(im.resize((tile, th), Image.LANCZOS), (x, y))
+        draw.rectangle((x - 1, y - 1, x + tile, y + th), outline="#BDBDBD")
+        draw.text((x + 2, y + th + 6), name, fill="#222222", font=font)
+    sheet.save(out_path, quality=88)
+    return out_path
+
+
 def load_spec(path):
     """(name, theme, folder) from a YAML/JSON theme file with the THEMES keys plus an optional `name`."""
     try:
@@ -724,7 +1026,13 @@ def main():
     ap.add_argument("--outdir", default=os.path.join(HERE, "templates"))
     ap.add_argument("--list", action="store_true", help="list the built-in themes and exit")
     ap.add_argument("--no-preview", action="store_true", help="don't add the layout preview slides")
+    ap.add_argument("--gallery", action="store_true",
+                    help="render one sample slide per bundled template into <outdir>/gallery.jpg "
+                         "(needs PowerPoint or LibreOffice; install the open fonts first: python fonts.py)")
     a = ap.parse_args()
+    if a.gallery:
+        print("wrote", gallery(os.path.join(a.outdir, "gallery.jpg"), [a.theme] if a.theme else None))
+        return
     if a.list:
         for key, t in THEMES.items():
             print(f"{key:<11} {'dark ' if t.get('dark') else 'light'}  {DESCRIPTIONS.get(key, t['label'])}")

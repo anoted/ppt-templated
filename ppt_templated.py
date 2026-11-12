@@ -119,12 +119,12 @@ LAYOUTS = ("title", "section", "outline", "frame", "plain", "statement", "refere
 # ---- what the YAML may contain (checked on every build; unknown keys are reported, not ignored) ----
 META_KEYS = {"title", "subtitle", "author", "institute", "date", "short_title", "short_author", "short_institute",
              "template", "output", "transition", "valign", "section_style", "outline_title", "layouts", "overflow",
-             "logo"}
+             "logo", "fonts", "accent", "density", "arrange"}
 SLIDE_KEYS = {  # besides layout, notes, transition
     "title": {"title", "subtitle", "author", "institute", "date"},
     "section": {"title", "subtitle"},
     "outline": {"title"},
-    "frame": {"title", "subtitle", "content", "valign", "overflow"},
+    "frame": {"title", "subtitle", "content", "valign", "overflow", "arrange"},
     "plain": {"content", "valign"},
     "statement": {"title", "text", "subtitle"},
     "references": {"title", "items", "references", "size", "start", "numbered"},
@@ -171,6 +171,8 @@ CHOICES = {  # (where, key) -> accepted values
     ("table", "style"): ("booktabs", "striped", "grid", "plain"),
     ("chart", "legend"): ("bottom", "top", "right", "left", "none"),
     ("slide", "overflow"): ("shrink", "split"),
+    ("slide", "arrange"): ("auto", "stack", "columns"),
+    ("slide", "density"): ("compact", "normal", "airy"),
     ("cards", "style"): ("tinted", "outline", "solid"),
 }
 SYNONYMS = {"colour": "color", "font_size": "size", "fontsize": "size", "src": "path", "file": "path",
@@ -178,6 +180,68 @@ SYNONYMS = {"colour": "color", "font_size": "size", "fontsize": "size", "src": "
 
 # Average character width (em) of common Office fonts in English text, measured and padded ~6% for
 # word wrapping. Text heights are estimated from these; unknown fonts get 0.5, which is safe for all.
+
+# ---- the look, changed from the YAML (meta.fonts / meta.accent / meta.density) --------------------
+# meta.fonts: a set name -> (headings, body, code). Office fonts first, then open fonts (fonts.py).
+FONT_SETS = {
+    "calibri": ("Calibri Light", "Calibri", "Consolas"), "cambria": ("Cambria", "Cambria", "Consolas"),
+    "arial": ("Arial", "Arial", "Consolas"), "times": ("Times New Roman", "Times New Roman", "Consolas"),
+    "georgia": ("Georgia", "Cambria", "Consolas"), "palatino": ("Palatino Linotype", "Palatino Linotype", "Consolas"),
+    "garamond": ("Garamond", "Garamond", "Consolas"),
+    "schoolbook": ("Century Schoolbook", "Century Schoolbook", "Consolas"),
+    "gill": ("Gill Sans MT", "Gill Sans MT", "Consolas"),
+    "franklin": ("Franklin Gothic Medium", "Franklin Gothic Book", "Consolas"),
+    "segoe": ("Segoe UI Light", "Segoe UI", "Consolas"),
+    "latex": ("LM Sans 10", "LM Sans 10", "LM Mono 10"), "latex-serif": ("LM Roman 10", "LM Roman 10", "LM Mono 10"),
+    "stix": ("STIX Two Text", "STIX Two Text", "Consolas"),
+    "source": ("Source Serif 4", "Source Sans 3", "Source Code Pro"),
+    "source-sans": ("Source Sans 3", "Source Sans 3", "Source Code Pro"),
+    "fira": ("Fira Sans", "Fira Sans", "Fira Mono"), "plex": ("IBM Plex Sans", "IBM Plex Sans", "IBM Plex Mono"),
+    "plex-mono": ("IBM Plex Mono", "IBM Plex Sans", "IBM Plex Mono"),
+    "mono": ("JetBrains Mono", "JetBrains Mono", "JetBrains Mono"),
+}
+# meta.accent: a name or "#RRGGBB"; it is darkened or lightened until it reads on the template's background
+ACCENTS = {"navy": "1F3A5F", "blue": "2563EB", "teal": "0F766E", "green": "2F7D4F", "forest": "1F5A44",
+           "olive": "6B7A1F", "gold": "B8860B", "orange": "D9730D", "red": "C0392B", "crimson": "A6192E",
+           "maroon": "7B1E2B", "magenta": "B5179E", "purple": "6D3FB2", "indigo": "3F3D9E", "slate": "475569",
+           "black": "1A1A1A"}
+DENSITY = {"compact": 0.88, "normal": 1.0, "airy": 1.12}   # body text size relative to the template's
+DEFAULT_MONO = "Consolas"  # font of `code` when the template names none
+
+# ---- frames arranged and split automatically --------------------------------------------------------
+FIGURES = {"image", "placeholder", "plot", "chart"}                      # one of these beside ...
+TEXTUAL = {"bullets", "numbered", "text", "block", "alertblock", "exampleblock", "math", "quote"}  # ... these
+SPLIT_LISTS = ("cards", "timeline")   # besides bullets, numbered and table: continued on more slides
+
+# ---- warnings: a stable code and what to do, for --json -------------------------------------------
+WARNING_CODES = [  # (pattern in the message, code, fix); the first match wins
+    (r"\(measured\)", "overlap-measured", "shorten the text named in the message or move part of the slide to a "
+                                         "new one; this was measured on the rendered slide"),
+    (r"shrunk to", "text-shrunk", "cut text, or let it continue on a second slide (overflow: split is the default)"),
+    (r"does not fit", "content-overflow", "move some items to a new slide or cut content"),
+    (r"title wraps", "title-long", "shorten the title to one line"),
+    (r"unknown key", "unknown-key", "remove the key or use the one suggested; "
+                                    "python ppt_templated.py --explain ITEM lists the keys"),
+    (r"is not one of", "bad-value", "use one of the values listed in the message"),
+    (r"unknown layout", "unknown-layout", "use one of: " + ", ".join(LAYOUTS)),
+    (r"written on the slide itself", "misplaced-item", "put the items in the list under content:"),
+    (r"not a mapping", "bad-slide", "start the slide with `- title: ...` or `- layout: ...`"),
+    (r"does not work here|build works on", "bad-option", "move or remove the option as the message says"),
+    (r"dpi at this size", "image-low-resolution", "use a larger image or an SVG/PDF"),
+    (r"no SVG renderer", "svg-renderer", "install Chrome/Edge or `pip install cairosvg`, or ignore for PowerPoint 2019+"),
+    (r"is wider than a", "word-too-wide", "shorten that word, or use fewer entries per row"),
+    (r"diagram drawn with", "diagram-small", "give the diagram a slide of its own, or fewer / shorter nodes"),
+    (r"is not installed", "font-missing", "run the command in the message, or choose a template whose fonts you have"),
+]
+
+
+def classify(msg: str) -> tuple:
+    """(code, fix) of a warning message; ('other', '') when the message itself says what to do."""
+    for pattern, code, fix in WARNING_CODES:
+        if re.search(pattern, msg):
+            return code, fix
+    return "other", ""
+
 
 MARK = "\u2063"  # invisible separator used to mark math runs until they are converted
 FLOW_MIN_PT = 9   # flow/steps diagrams shrink to fit, but their text not below this size (pt)
@@ -387,11 +451,35 @@ def whole(v, what: str) -> int:
         raise ValueError(f"{what} must be a whole number, got {v!r}") from None
 
 
+def contrast(a: str, b: str) -> float:
+    """WCAG contrast ratio (1-21) of two 'RRGGBB' colours."""
+    la, lb = sorted((luminance(a), luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def readable(color: str, background: str, target: float = 4.5) -> str:
+    """`color`, made darker (on a light background) or lighter (on a dark one) until its contrast with
+    the background reaches `target`: an accent colour that can carry titles and bars on this template."""
+    import colorsys
+    r, g, b = (int(color[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    h, l, sat = colorsys.rgb_to_hls(r, g, b)
+    step = -0.02 if luminance(background) > 0.5 else 0.02
+    out = color
+    for _ in range(50):
+        if contrast(out, background) >= target or not 0.0 < l < 1.0:
+            break
+        l = min(1.0, max(0.0, l + step))
+        out = "".join(f"{round(c * 255):02X}" for c in colorsys.hls_to_rgb(h, l, sat))
+    return out.upper()
+
+
 def item_kinds(content) -> list:
     """Item names of a content list, without checking it (for reports)."""
     out = []
     for it in content if isinstance(content, list) else []:
-        if isinstance(it, str) or (isinstance(it, (int, float)) and not isinstance(it, bool)):
+        if isinstance(it, tuple):   # already prepared: (kind, item)
+            out.append(it[0])
+        elif isinstance(it, str) or (isinstance(it, (int, float)) and not isinstance(it, bool)):
             out.append("text")
         elif isinstance(it, list):
             out.append("bullets")
@@ -710,6 +798,29 @@ def style_sizes(prs):
     return sizes, title
 
 
+def template_settings(prs) -> dict:
+    """Settings a bundled template carries in its file properties (written by build_template.py),
+    e.g. {'mono': 'JetBrains Mono'}; empty for any other template."""
+    out = {}
+    for part in str(prs.core_properties.keywords or "").split(";")[1:]:
+        k, _, v = part.partition("=")
+        if k.strip() and v.strip():
+            out[k.strip()] = v.strip()
+    return out
+
+
+def fonts_of(path: str) -> list:
+    """The fonts a template uses: headings, body and code font, each once."""
+    prs = open_template(path)
+    root = etree.fromstring(prs.slide_master.part.part_related_by(RT.THEME).blob)
+    names = []
+    for k in ("major", "minor"):
+        latin = root.find(f".//{qn(f'a:{k}Font')}/{qn('a:latin')}")
+        names.append(latin.get("typeface") if latin is not None else None)
+    names.append(template_settings(prs).get("mono"))
+    return list(dict.fromkeys(n for n in names if n))
+
+
 def template_names() -> dict:
     """Bundled templates: {short name: path}, e.g. {'oxford': '.../templates/beamer_oxford.pptx'}."""
     out = {}
@@ -795,6 +906,9 @@ class DeckBuilder:
         if not keep_template_slides:
             remove_all_slides(self.prs)
         self.layouts = self._resolve_layouts(self.meta.get("layouts") or {})
+        self.mono = template_settings(self.prs).get("mono", DEFAULT_MONO)   # font of `code`
+        self.style = self._apply_style()      # meta.fonts / accent / density, written into the deck's theme
+        self.nav = self._find_nav()           # the template's "Section Navigation" shape, if it has one
         self.level_sizes, self.title_size = style_sizes(self.prs)
         lvl1 = self.prs.slide_master._element.find(f"{qn('p:txStyles')}/{qn('p:bodyStyle')}/{qn('a:lvl1pPr')}")
         self.body_indent = to_in(int(lvl1.get("marL", 342900))) if lvl1 is not None else 0.375
@@ -815,6 +929,152 @@ class DeckBuilder:
         self.substitute_tokens = substitute_tokens
         self._flow_cache = {}
         self.logo = self._logo_spec(self.meta.get("logo"))
+        self._check_fonts([fonts["major"], fonts["minor"]])
+
+    # ---- the look: fonts, accent colour and text size from meta -------------------------------------
+    def _apply_style(self) -> dict:
+        """meta.fonts / meta.accent / meta.density change the deck's own copy of the template: the theme's
+        fonts and structure colour, and the master's body text sizes. Everything on the slides refers to
+        those, so the whole deck follows. Returns what is in effect, for --json."""
+        m = self.meta
+        part = self.prs.slide_master.part.part_related_by(RT.THEME)
+        root, changed = etree.fromstring(part.blob), False
+        fonts = m.get("fonts")
+        if fonts is not None:
+            if isinstance(fonts, str):
+                if fonts.lower() not in FONT_SETS:
+                    raise SystemExit(f"error: meta.fonts: unknown font set '{fonts}'{suggest(fonts, FONT_SETS)}. "
+                                     f"Sets: {', '.join(FONT_SETS)} - or give the fonts yourself: "
+                                     f"fonts: {{headings: Georgia, body: Calibri, code: Consolas}}")
+                heads, body, code = FONT_SETS[fonts.lower()]
+            elif isinstance(fonts, dict):
+                self._check("fonts", fonts, {"headings", "body", "code"})
+                heads, body, code = fonts.get("headings"), fonts.get("body"), fonts.get("code")
+            else:
+                raise SystemExit("error: meta.fonts must be a set name (e.g. palatino) or "
+                                 "{headings: ..., body: ..., code: ...}")
+            for key, name in (("major", heads), ("minor", body)):
+                latin = root.find(f".//{qn(f'a:{key}Font')}/{qn('a:latin')}")
+                if name and latin is not None:
+                    latin.set("typeface", str(name))
+                    changed = True
+            if code:
+                self.mono = str(code)
+        accent = m.get("accent")
+        if accent is not None:
+            name = str(accent).strip()
+            hexv = ACCENTS.get(name.lower()) or name.lstrip("#").upper()
+            if not re.fullmatch(r"[0-9A-F]{6}", hexv):
+                raise SystemExit(f"error: meta.accent: '{accent}' is not a colour name{suggest(name, ACCENTS)} "
+                                 f"({', '.join(ACCENTS)}) or a hex colour like \"#1F3A5F\"")
+            hexv = readable(hexv, self._theme()[0]["bg1"])
+            scheme = root.find(f".//{qn('a:clrScheme')}")
+            for slot in ("accent1", "hlink"):
+                el = scheme.find(qn(f"a:{slot}")) if scheme is not None else None
+                if el is not None:
+                    for ch in list(el):
+                        el.remove(ch)
+                    etree.SubElement(el, qn("a:srgbClr")).set("val", hexv)
+                    changed = True
+        if changed:
+            part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+            self._theme_cache = None
+        density = str(m.get("density", "normal")).lower()
+        k = DENSITY.get(density, 1.0)
+        if k != 1.0:
+            body = self.prs.slide_master._element.find(f"{qn('p:txStyles')}/{qn('p:bodyStyle')}")
+            for rpr in (body.iter(qn("a:defRPr")) if body is not None else []):
+                if rpr.get("sz"):
+                    rpr.set("sz", str(int(round(int(rpr.get("sz")) * k / 100)) * 100))
+        colors, names = self._theme()
+        return {"fonts": {"headings": names["major"], "body": names["minor"], "code": self.mono},
+                "accent": "#" + colors.get("accent1", ""), "density": density if density in DENSITY else "normal"}
+
+    def _check_fonts(self, names) -> None:
+        """Warn once about an open font (fonts.py) that is not installed: PowerPoint would substitute it.
+        Office fonts are not checked - they are there wherever the deck is opened in PowerPoint."""
+        import fonts as fontlib
+        seen = self.__dict__.setdefault("_fonts_checked", set())
+        names = [n for n in names if n in fontlib.FAMILIES and n not in seen]
+        seen.update(names)
+        for name in fontlib.missing(names):
+            self.warn(f"font '{name}' is not installed on this machine: PowerPoint will show another font - "
+                      f"{fontlib.hint(name)} (or choose a template / meta.fonts set you have)")
+
+    # ---- section navigation (templates with a "Section Navigation" shape) --------------------------
+    def _find_nav(self):
+        """The master's shape named "Section Navigation": where the section names go on every frame, and
+        their text size and colour. Its {sections} token is removed (the names are written per slide)."""
+        for sh in iter_shapes_deep(self.prs.slide_master.shapes):
+            if sh.name != "Section Navigation" or not sh.has_text_frame or sh.is_placeholder:
+                continue
+            rpr = sh._element.find(f".//{qn('a:rPr')}")
+            fill = rpr.find(qn("a:solidFill")) if rpr is not None else None
+            box = Box(to_in(sh.left), to_in(sh.top), to_in(sh.width), to_in(sh.height))
+            nav = {"box": box, "size": int(rpr.get("sz")) / 100 if rpr is not None and rpr.get("sz") else 10.0,
+                   "fill": copy.deepcopy(fill) if fill is not None else None,
+                   "inset": to_in(sh.text_frame.margin_left), "side": box.h > box.w}
+            for r in sh._element.iter(qn("a:t")):
+                r.text = (r.text or "").replace("{sections}", "")
+            return nav
+        return None
+
+    def _place_nav(self, slide) -> None:
+        """Write the section names into the navigation strip / sidebar of a frame: the current section in
+        full colour and bold, the others dimmed. Too many to fit: smaller text, then only those around
+        the current one."""
+        nav, names = self.nav, [strip_markup(str(t)) for t in self.sections]
+        if not nav or not names:
+            return
+        b, cur = nav["box"], self.section_no - 1        # cur < 0: before the first section
+        inner = b.w - 2 * nav["inset"] if nav["side"] else b.w - nav["inset"] - 0.3
+        sep = "\u2003\u2003"
+
+        def fits(size, lo, hi):
+            shown = names[lo:hi + 1]
+            if nav["side"]:
+                lines = sum(est_lines(t, inner, size, self.fb, True) for t in shown) + (lo > 0) + (hi < len(names) - 1)
+                return lines * size * self.lh / 72 + len(shown) * 6 / 72 <= b.h
+            text = sep.join(shown) + (sep + "\u2026") * ((lo > 0) + (hi < len(names) - 1))
+            return metrics.text_width(text, size, self.fb, True) <= inner
+
+        lo, hi, size = 0, len(names) - 1, nav["size"]
+        for size in (nav["size"], nav["size"] - 1, nav["size"] - 2):
+            if fits(size, lo, hi):
+                break
+        else:
+            mid = max(cur, 0)
+            while not fits(size, lo, hi) and (lo < mid or hi > mid):
+                if mid - lo >= hi - mid and lo < mid:
+                    lo += 1
+                else:
+                    hi -= 1
+        tb = slide.shapes.add_textbox(inch(b.x), inch(b.y), inch(b.w), inch(b.h))
+        tb.name = "Section Navigation"
+        tf = tb.text_frame
+        tf.word_wrap = bool(nav["side"])
+        tf.auto_size = MSO_AUTO_SIZE.NONE
+        tf.vertical_anchor = MSO_ANCHOR.TOP if nav["side"] else MSO_ANCHOR.MIDDLE
+        tf.margin_left = inch(nav["inset"])
+        tf.margin_right = inch(nav["inset"] if nav["side"] else 0.3)
+        tf.margin_top = tf.margin_bottom = 0
+        parts = [(None, "\u2026")] * (lo > 0) + [(i, names[i]) for i in range(lo, hi + 1)] \
+            + [(None, "\u2026")] * (hi < len(names) - 1)
+        p = tf.paragraphs[0]
+        for k, (i, text) in enumerate(parts):
+            if k and nav["side"]:
+                p = tf.add_paragraph()
+                p.space_before = Pt(6)
+            elif k:
+                r = p.add_run()
+                r.text, r.font.size = sep, Pt(size)
+            r = p.add_run()
+            r.text, r.font.size, r.font.bold = text, Pt(size), (i == cur)
+            if nav["fill"] is not None:
+                fill = copy.deepcopy(nav["fill"])
+                if i != cur and cur >= 0 and len(fill):   # the other sections: dimmed
+                    etree.SubElement(fill[0], qn("a:alpha")).set("val", "55000")
+                r._r.get_or_add_rPr().insert(0, fill)
 
     # ---- template introspection -------------------------------------------------------
     def _resolve_layouts(self, overrides):
@@ -901,7 +1161,8 @@ class DeckBuilder:
         line = f"{where}: {msg}" if where else msg
         if line not in self.warnings:
             self.warnings.append(line)
-            self.problems.append({"slide": slide or self._slide_no, "message": msg})
+            code, fix = classify(msg)
+            self.problems.append({"slide": slide or self._slide_no, "code": code, "message": msg, "fix": fix})
             warn(line)
 
     def _check(self, where, d, allowed):
@@ -944,6 +1205,7 @@ class DeckBuilder:
                 return slides
         self.steps, self.builds = [], {}
         self._fill_info = None  # (share of the content area used, text scale) of a frame or plain slide
+        self._arranged = None   # "columns" when a figure and its text were put side by side automatically
         if kind == "title":
             slides = [self._title_slide(spec)]
         elif kind == "section":
@@ -977,6 +1239,9 @@ class DeckBuilder:
                 slide.notes_slide.notes_text_frame.text = str(spec["notes"]).strip()
             if kind in ("title", "section", "outline", "frame", "references"):
                 self._place_logo(slide, big=(kind == "title"))
+            if kind in ("outline", "frame", "references") or (
+                    kind == "section" and self.meta.get("section_style") == "outline"):
+                self._place_nav(slide)
             self._apply_timing(slide, spec.get("transition", self.meta.get("transition")))
             title = spec.get("title") or (spec.get("text") if kind == "statement" else "")
             self.slide_info.append({
@@ -984,7 +1249,7 @@ class DeckBuilder:
                 "items": item_kinds(spec.get("content")) if kind in ("frame", "plain") else [],
                 "fill": None if self._fill_info is None or k else round(self._fill_info[0], 2),
                 "text_scale": None if self._fill_info is None or k else self._fill_info[1],
-                "animation_steps": len(self.steps)})
+                "arranged": self._arranged, "animation_steps": len(self.steps)})
         return slides
 
     def _set_title(self, slide, text, subtitle=None, fit_width=None):
@@ -1114,8 +1379,55 @@ class DeckBuilder:
         self._set_title(slide, spec.get("title", ""), spec.get("subtitle"))
         keep = {slide.shapes.title.placeholder_format.idx} if slide.shapes.title else set()
         self._remove_empty_placeholders(slide, keep)
-        self._render_items(slide, items, self.area, valign, top=True)
+        arranged = self._auto_columns(items, self.area, self._arrange_mode(spec))
+        if arranged is not items:
+            self._arranged = "columns"
+        self._render_items(slide, arranged, self.area, valign, top=True)
         return slide
+
+    def _arrange_mode(self, spec) -> str:
+        mode = str(spec.get("arrange", self.meta.get("arrange", "auto"))).lower()
+        return mode if mode in ("auto", "stack", "columns") else "auto"
+
+    def _auto_columns(self, items, box, mode="auto"):
+        """A frame that holds one figure and some text, written one under the other: put them side by side
+        when the figure comes out larger that way (it usually does on a wide slide). The figure goes on
+        the side it was written on: first = left. Returns `items` itself when nothing changes.
+        mode: auto | stack (never) | columns (always, when the content is one figure plus text)."""
+        if mode == "stack" or len(items) < 2:
+            return items
+        figs = [i for i, (k, _) in enumerate(items) if k in FIGURES]
+        if len(figs) != 1 or any(k not in FIGURES | TEXTUAL for k, _ in items):
+            return items
+        i = figs[0]
+        kind, fig = items[i]
+        spec = fig[kind]
+        if 0 < i < len(items) - 1 or spec.get("width") or spec.get("height"):
+            return items   # text above and below it, or sized by hand: an order the author chose
+        texts = items[:i] + items[i + 1:]
+        ratio = (self._figure(kind, fig)[1] if kind != "chart" else None) or 1.5
+        cap = 0.4 if spec.get("caption") else 0
+        heights, total = self._plan(items, box, 1.0)
+        stacked = 0.0
+        if total <= box.h + 0.02:
+            w = min(box.w * (0.75 if kind in ("image", "placeholder") else 1.0), (heights[i] - cap) * ratio)
+            stacked = w * w / ratio
+        best = None  # (figure area, share of the width for the figure)
+        for share in (0.6, 0.5, 0.4):
+            fw = (box.w - COL_GAP) * share
+            tw = box.w - COL_GAP - fw
+            th = sum(self._measure(k, it, tw, 1.0)[0] for k, it in texts) + GAP * (len(texts) - 1)
+            if th > box.h:
+                continue
+            w = min(fw, (box.h - cap) * ratio)
+            if best is None or w * w / ratio > best[0] * 1.05:
+                best = (w * w / ratio, share)
+        if best is None or (mode == "auto" and best[0] <= stacked * 1.15):
+            return items
+        if kind in ("image", "placeholder"):   # fill its column
+            fig = {**fig, kind: {**spec, "width": 1.0}}
+        cols = [{"content": [(kind, fig)], "width": best[1]}, {"content": texts}]
+        return [("columns", {"columns": cols if i == 0 else cols[::-1]})]
 
     def _delete_slide(self, slide):
         lst = self.prs.slides._sldIdLst
@@ -1554,7 +1866,7 @@ class DeckBuilder:
             elif g["i"] is not None:
                 self._add_runs(p, g["i"], {**style, "italic": True})
             elif g["code"] is not None:
-                self._run(p, g["code"], {**style, "font": "Courier New"})
+                self._run(p, g["code"], {**style, "font": self.mono})
             elif g["lt"] is not None:
                 self._run(p, g["lt"], {**style, "href": g["href"]})
             elif g["math"] is not None:
@@ -1660,8 +1972,9 @@ class DeckBuilder:
             r = p.add_run()
             r.text = line if line else " "
             r._r.find(qn("a:t")).set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
-            r.font.name, r.font.size = "Courier New", Pt(size)
+            r.font.name, r.font.size = self.mono, Pt(size)
             self._font_color(r.font, "tx1")
+        self._check_fonts([self.mono])
         self._animate(it, shp, "sp_text")
 
     # ---- charts -------------------------------------------------------------------------
@@ -2164,27 +2477,67 @@ class DeckBuilder:
 
     # ---- long content: continued on more slides (overflow: split) ---------------------------
     def _split_frame(self, spec):
-        """[spec], or one spec per slide when `overflow: split` is set and the content - one bullet list or
-        one table - does not fit on one slide (it would shrink below 90%)."""
-        mode = str(spec.get("overflow", self.meta.get("overflow", "shrink"))).lower()
-        if mode != "split":
-            return [spec]
+        """[spec], or one spec per slide when the frame's content does not fit on one slide (it would
+        shrink below 90%). Lists, tables, cards and timelines are continued; a stack of several items is
+        divided between slides at item boundaries. `overflow: shrink` (meta or slide) turns this off."""
+        mode = str(spec.get("overflow", self.meta.get("overflow", "split"))).lower()
         items = self._prepare(spec.get("content"))
-        if len(items) != 1 or items[0][0] not in ("bullets", "numbered", "table"):
-            if str(spec.get("overflow", "")).lower() == "split" and items:
-                self.warn("overflow: split works when the content is one bullets/numbered list or one table "
-                          "- shrunk to fit instead")
+        if mode != "split" or not items:
             return [spec]
-        kind, it = items[0]
+        if len(items) == 1:
+            contents = [[c] for c in (self._split_item(*items[0]) or [])]
+        else:
+            contents = []
+            for page in self._split_stack(items, spec) or []:
+                parts = self._split_item(*page[0]) if len(page) == 1 else None
+                contents += [[c] for c in parts] if parts else [page]
+        n, title = len(contents), str(spec.get("title", ""))
+        if n < 2:
+            return [spec]
+        return [{**spec, "_part": True, "title": f"{title} ({k}/{n})" if title else "", "content": c}
+                for k, c in enumerate(contents, 1)]
+
+    def _split_stack(self, items, spec):
+        """Several items that do not fit one slide even with the text at 90%: the items of each slide, in
+        order, as many per slide as fit. None when one slide is enough."""
+        box = self.area
+        for cand in (self._auto_columns(items, box, self._arrange_mode(spec)), items):
+            if any(self._plan(cand, box, sc)[1] <= box.h + 0.02 for sc in (1.0, 0.95, 0.9)):
+                return None
+        pages, cur = [], []
+        for it in items:
+            if cur and self._plan(cur + [it], box, 0.9)[1] > box.h + 0.02:
+                pages.append(cur)
+                cur = []
+            cur.append(it)
+        pages.append(cur)
+        return pages if len(pages) > 1 else None
+
+    def _split_item(self, kind, it):
+        """One list, table, row of cards or timeline that is too long for a slide: its parts, as content
+        items. None when it fits (or is not something that can be continued)."""
+        if kind not in ("bullets", "numbered", "table") + SPLIT_LISTS:
+            return None
         # only known settings go on: the original slide already reported the rest
         box, opts = self.area, {k: v for k, v in it.items() if k in SETTINGS[kind] | ITEM_OPTS}
+        if kind in SPLIT_LISTS:
+            inner = it[kind]
+            entries = list(inner.get("items") or [])
+            if self._measure(kind, it, box.w, 0.9)[0] <= box.h or len(entries) < 2:
+                return None
+            for n in range(2, len(entries) + 1):  # the fewest slides whose parts all fit, evenly filled
+                cuts = [round(k * len(entries) / n) for k in range(n + 1)]
+                parts = [{kind: {**inner, "items": entries[a:b]}, **opts} for a, b in zip(cuts, cuts[1:])]
+                if all(self._measure(kind, part, box.w, 1.0)[0] <= box.h for part in parts):
+                    return parts
+            return None
         if kind == "table":
             t = it["table"]
             _, _, width, colw, heights = self._table_geometry(t, box.w, 1.0)
             head = 1 if t.get("header") else 0
             cap = 0.4 if t.get("caption") else 0
             if sum(heights) * 0.9 + cap <= box.h:
-                return [spec]
+                return None
             pages = paginate(heights[head:], box.h - sum(heights[:head]) - cap - 0.05)
             rows = list(t.get("rows") or [])
             contents = []
@@ -2203,7 +2556,7 @@ class DeckBuilder:
                     groups.append([e])
             heights = [self._text_height(flatten_bullets(g), box.w, 1.0, it) - 0.12 for g in groups]
             if (sum(heights) + 0.12) * 0.9 <= box.h:
-                return [spec]
+                return None
             pages = paginate(heights, box.h - 0.17)
             start, contents = whole(it.get("start") or 1, "numbered start") if kind == "numbered" else 1, []
             for page in pages:
@@ -2212,11 +2565,7 @@ class DeckBuilder:
                     item["start"] = start  # numbering continues on the next slide
                     start += len(page)
                 contents.append(item)
-        n, title = len(contents), str(spec.get("title", ""))
-        if n == 1:
-            return [spec]
-        return [{**spec, "_part": True, "title": f"{title} ({k}/{n})" if title else "", "content": [c]}
-                for k, c in enumerate(contents, 1)]
+        return contents if len(contents) > 1 else None
 
     # ---- statement slide, logo ---------------------------------------------------------------
     def _statement_slide(self, spec):
@@ -3048,6 +3397,138 @@ class DeckBuilder:
 # --------------------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------------------
+# ---- `--explain`: what each item, layout and meta key is for, with the smallest useful example ------
+# The keys and accepted values are not repeated here: explain() reads them from SETTINGS, SLIDE_KEYS,
+# META_KEYS and CHOICES, the same tables the builder checks the YAML against.
+ITEM_DOCS = {
+    "bullets": ("points to make; a nested list is a sub-point",
+                "- bullets:\n    - First point\n    - - a detail of the first point\n    - Second point"),
+    "numbered": ("steps or a ranking; numbering continues when the list runs on to another slide",
+                 "- numbered: [Collect, Clean, Train]"),
+    "text": ("a paragraph (a bare string is the same)", '- "One or two sentences."'),
+    "block": ("a titled box: definition, theorem, remark", '- block: {title: Definition, text: "..."}'),
+    "alertblock": ("the one warning or takeaway of a slide", '- alertblock: {title: Caveat, text: "..."}'),
+    "exampleblock": ("an example", '- exampleblock: {title: Example, text: "..."}'),
+    "math": ("a display equation (LaTeX in single quotes)", "- math: '\\hat{y} = \\sigma(Wx + b)'"),
+    "code": ("a code listing in the template's code font", "- code: |\n    def f(x):\n        return x + 1"),
+    "image": ("an existing figure; SVG and PDF stay vector", "- image: assets/fig.svg\n  caption: What it shows"),
+    "images": ("a row of figures", '- images:\n    - {path: a.png, caption: "(a) before"}\n'
+                                   '    - {path: b.png, caption: "(b) after"}'),
+    "placeholder": ("a figure that does not exist yet: a labelled box of the right shape",
+                    '- placeholder: {label: Method diagram, note: "draw this later", aspect: "4:3"}'),
+    "table": ("tabular results; `data: file.csv` reads the rows from a file",
+              '- table:\n    header: [Model, Accuracy]\n    rows: [[Baseline, "81.2%"], ["**Ours**", "==85.4%=="]]'),
+    "chart": ("a native PowerPoint chart the audience can edit",
+              "- chart:\n    type: column\n    categories: [A, B, C]\n    series: {Ours: [3, 5, 4], Baseline: [2, 3, 3]}"),
+    "plot": ("a publication-style figure drawn from numbers or a formula (matplotlib)",
+             '- plot: {type: function, f: "1/(1+exp(-x))", x: [-6, 6]}'),
+    "stats": ("two to four headline numbers", '- stats:\n    - {value: "+4.2", label: accuracy points}\n'
+                                              '    - {value: "3x", label: faster}'),
+    "cards": ("three to eight parallel ideas in a grid (features, options, contributions)",
+              '- cards:\n    - {title: Fast, text: "..."}\n    - {title: Simple, text: "..."}'),
+    "timeline": ("events in order", "- timeline:\n    - {date: 2023, text: Idea}\n    - {date: 2025, text: Release}"),
+    "quote": ("a sentence worth citing", '- quote: {text: "...", by: Author}'),
+    "flow": ("a process or decision as boxes and arrows", "- flow: {edges: [Data -> Model -> Result]}"),
+    "steps": ("a row of chevrons for the stages of a process", "- steps: [Plan, Build, Test]"),
+    "columns": ("items side by side when you want to decide it yourself; a frame with one figure and "
+                "text is arranged like this automatically",
+                "- columns:\n    - - image: fig.svg\n    - - bullets: [A, B]"),
+    "spacer": ("extra vertical space in inches; rarely needed", "- spacer: 0.3"),
+}
+LAYOUT_DOCS = {
+    "title": ("the title slide; everything comes from meta", "- layout: title"),
+    "section": ("starts a section; it appears in the outline and in section navigation",
+                "- layout: section\n  title: Results"),
+    "outline": ("the list of sections", "- layout: outline"),
+    "frame": ("a normal slide (the default: `layout:` can be left out)",
+              "- title: The message of this slide\n  content:\n    - bullets: [A, B]"),
+    "plain": ("content only: no title, no footline", "- layout: plain\n  content:\n    - image: full.png"),
+    "statement": ("one sentence, as large as the slide allows", "- layout: statement\n  text: The one thing to remember"),
+    "references": ("sources; continues on more slides by itself",
+                   "- layout: references\n  items: ['A. Author, \"A paper,\" *Venue*, 2024.']"),
+    "closing": ("the last slide", "- layout: closing\n  title: Thank you"),
+}
+META_DOCS = {
+    "title": "deck title", "subtitle": "line under the title", "author": "author(s)", "institute": "affiliation",
+    "date": "a date, or `today`", "short_title": "title in the footline (default: title)",
+    "short_author": "author in the footline", "short_institute": "institute in the footline",
+    "template": "bundled name (--templates) or a .pptx/.potx path", "output": "output file",
+    "fonts": "another font set for this deck: " + " | ".join(FONT_SETS)
+             + " - or {headings: ..., body: ..., code: ...}",
+    "accent": "another structure colour: " + " | ".join(ACCENTS) + ' - or "#RRGGBB" (made readable for you)',
+    "density": "body text size: compact (12% smaller) | normal | airy (12% larger)",
+    "arrange": "one figure plus text on a frame: auto (side by side when the figure gets larger) | stack | columns",
+    "overflow": "content too long for a slide: split (continue on the next slide, default) | shrink",
+    "valign": "where content sits in the content area: center (default) | top | bottom",
+    "transition": "slide transition for every slide, e.g. fade", "logo": "a logo on every slide: a path, or {path, ...}",
+    "section_style": "`outline` shows the outline with the current section highlighted at each section",
+    "outline_title": "title of those outline slides", "layouts": "map layout keys to the layout names of your own template",
+}
+
+
+def explain(name: str | None = None) -> dict:
+    """What `--explain [NAME]` shows, as data: the overview, or one item / layout / `meta`."""
+    def choices(where, keys):
+        return {k: list(CHOICES[(where, k)]) for k in sorted(keys) if (where, k) in CHOICES}
+
+    if not name:
+        return {"layouts": {k: v[0] for k, v in LAYOUT_DOCS.items()},
+                "items": {k: v[0] for k, v in ITEM_DOCS.items()},
+                "any_item": {"animate": "entrance effect, e.g. fade", "build": "reveal step by step ("
+                             + ", ".join(sorted(BUILDABLE)) + ")", "name": "pairs shapes for Morph"},
+                "inline": "**bold** *italic* `code` ==alert== [link](url) $math$",
+                "colors": "structure | alert | example | muted (roles that follow the template)",
+                "meta": sorted(META_KEYS), "more": "--explain ITEM | LAYOUT | meta"}
+    key = str(name).strip().lower()
+    if key == "meta":
+        return {"name": "meta", "what": "deck-wide settings", "keys": {k: META_DOCS.get(k, "") for k in sorted(META_KEYS)},
+                "example": "meta:\n  title: Talk Title\n  author: Your Name\n  date: today\n  template: oxford"}
+    if key in LAYOUT_DOCS:
+        return {"name": key, "kind": "layout", "what": LAYOUT_DOCS[key][0],
+                "keys": sorted(SLIDE_KEYS[key] | {"layout", "notes", "transition"}),
+                "values": choices("slide", SLIDE_KEYS[key]), "example": LAYOUT_DOCS[key][1]}
+    if key in ITEM_DOCS:
+        if key == "plot":
+            import plots
+            keys, values = sorted(plots.keys(None)), {"type": list(plots.PLOT_TYPES)}
+        else:
+            keys, values = sorted(str(k) for k in SETTINGS[key]), choices(key, SETTINGS[key])
+        if key == "columns":
+            keys, values = ["content", "valign", "width"], choices("column", {"valign"})
+        return {"name": key, "kind": "item", "what": ITEM_DOCS[key][0], "keys": keys, "values": values,
+                "also": sorted(ITEM_OPTS if key in BUILDABLE else ITEM_OPTS - {"build"}) if key != "spacer" else [],
+                "example": ITEM_DOCS[key][1]}
+    names = list(ITEM_DOCS) + list(LAYOUT_DOCS) + ["meta"]
+    raise SystemExit(f"error: nothing called '{name}'{suggest(key, names)}. Items: {', '.join(ITEM_DOCS)}. "
+                     f"Layouts: {', '.join(LAYOUT_DOCS)}. Or: meta")
+
+
+def explain_text(name: str | None = None) -> str:
+    d = explain(name)
+
+    def table(rows):
+        w = max(len(k) for k in rows)
+        return [f"  {k:<{w}}  {v}" for k, v in rows.items()]
+
+    if "items" in d:
+        return "\n".join(["LAYOUTS (layout: on a slide)"] + table(d["layouts"]) + ["", "ITEMS (in a slide's content: list)"]
+                         + table(d["items"]) + ["", "ANY ITEM"] + table(d["any_item"])
+                         + ["", f"INLINE   {d['inline']}", f"COLOURS  {d['colors']}",
+                            f"META     {', '.join(d['meta'])}", "",
+                            "Details:  python ppt_templated.py --explain table   (any item, any layout, or meta)"])
+    out = [f"{d['name']} - {d['what']}"]
+    if isinstance(d["keys"], dict):
+        out += table(d["keys"])
+    else:
+        out.append("  keys     " + (", ".join(d["keys"]) or "none"))
+        for k, v in d.get("values", {}).items():
+            out.append(f"  values   {k}: {' | '.join(v)}")
+        if d.get("also"):
+            out.append("  also     " + ", ".join(d["also"]) + "  (beside the item key)")
+    out += ["  example"] + ["    " + line for line in d["example"].split("\n")]
+    return "\n".join(out)
+
+
 def load_content(path: str) -> dict:
     try:
         with open(path, encoding="utf-8") as fh:
@@ -3090,7 +3571,8 @@ def build_deck(content_path: str, output: str | None = None, template: str | Non
 
 STARTER = """\
 # {name} - made with `python ppt_templated.py --new`. Reference: YAML_GUIDE.md (agents: AGENTS.md).
-# Build:  python ppt_templated.py {name} --preview
+# Check:  python ppt_templated.py {name} --check --json      Build:  python ppt_templated.py {name} --preview
+# Keys of any item:  python ppt_templated.py --explain table
 meta:
   title: Talk Title
   subtitle: One line on what this is about
@@ -3099,8 +3581,6 @@ meta:
   date: today
   # python ppt_templated.py --templates lists the templates (light and dark)
   template: {template}
-  # long bullet lists and tables continue on more slides instead of shrinking
-  overflow: split
 
 slides:
   - layout: title
@@ -3116,11 +3596,11 @@ slides:
           - Second point
         build: true
 
+  # a figure and its text: written one after the other, placed side by side automatically
   - title: Our approach
     content:
-      - columns:
-          - - placeholder: {{label: Method diagram, note: "draw this later", aspect: "4:3"}}
-          - - bullets: [Step one, Step two, Step three]
+      - placeholder: {{label: Method diagram, note: "draw this later", aspect: "4:3"}}
+      - bullets: [Step one, Step two, Step three]
 
   - title: Results
     content:
@@ -3171,7 +3651,7 @@ def inspect_template(template: str | None = None, base_dir: str = ".", layouts: 
         "title slide   placeholders: " + ", ".join(ph.name for ph in b.layouts["title"].placeholders),
         f"content area  x {a.x:.2f}  y {a.y:.2f}  w {a.w:.2f}  h {a.h:.2f} in (every frame's content goes here)",
         f"mode          {'dark (light text on a dark background)' if b.dark else 'light'}",
-        f"fonts         headings {fonts['major']}, body {fonts['minor']}",
+        f"fonts         headings {fonts['major']}, body {fonts['minor']}, code {b.mono}",
         f"text sizes    frame title {b.title_size:g} pt; body levels "
         + " / ".join(f"{s:g}" for s in b.level_sizes) + " pt",
         f"item sizes    blocks {lv * .9:.0f}, tables {lv * .78:.0f}, flows {lv * .72:.0f}, code {lv * .7:.0f}, "
@@ -3186,6 +3666,8 @@ def main(argv=None):
         description="Build an editable Beamer-style .pptx from a YAML content file (reference: YAML_GUIDE.md).",
         epilog="examples:\n  python ppt_templated.py talk.yaml --preview\n  python ppt_templated.py talk.yaml --check --json"
                "\n  python ppt_templated.py --templates\n  python ppt_templated.py --new talk.yaml -t midnight"
+               "\n  python ppt_templated.py --explain            (what you can write)"
+               "\n  python ppt_templated.py --explain table      (keys and an example of one item)"
                "\n  python ppt_templated.py --inspect templates/beamer_paper.pptx",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("content", nargs="?", help="YAML content file")
@@ -3204,6 +3686,9 @@ def main(argv=None):
     ap.add_argument("--new", action="store_true", help="write a starter content file to CONTENT and exit")
     ap.add_argument("--inspect", nargs="?", const="", metavar="TEMPLATE",
                     help="describe a template (default: the YAML's or the default template) and exit")
+    ap.add_argument("--explain", nargs="?", const="", metavar="NAME",
+                    help="what you can write: all layouts and items, or the keys and an example of one "
+                         "(an item, a layout, or meta)")
     ap.add_argument("--keep-template-slides", action="store_true", help="keep slides already in the template")
     a = ap.parse_args(argv)
     for opt in ("preview", "inspect"):  # `--preview talk.yaml`: the YAML is the content, not the option's value
@@ -3216,13 +3701,27 @@ def main(argv=None):
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
+    if a.explain is not None:
+        name = a.explain or (a.content if a.content and not os.path.exists(a.content) else "")
+        try:
+            print(json.dumps(explain(name), indent=2, ensure_ascii=False) if a.json else explain_text(name))
+        except SystemExit as exc:
+            if not a.json:
+                raise
+            print(json.dumps({"ok": False, "error": str(exc.code).removeprefix("error: ")}, indent=2))
+            sys.exit(1)
+        return
     if a.templates:
         rows = describe_templates()
+        import fonts as fontlib
+        names = template_names()
         if a.json:
-            print(json.dumps([{"name": n, "mode": m, "description": d} for n, m, d in rows], indent=2))
+            print(json.dumps([{"name": n, "mode": m, "description": d, "fonts": fonts_of(names[n]),
+                               "fonts_missing": fontlib.missing(fonts_of(names[n]))} for n, m, d in rows], indent=2))
         else:
             for n, m, d in rows:
-                print(f"{n:<11} {m:<5}  {d}")
+                gone = [f for f in fontlib.missing(fonts_of(names[n])) if f in fontlib.FAMILIES]
+                print(f"{n:<11} {m:<5}  {d}" + (f"  [install: python fonts.py --install {n}]" if gone else ""))
         return
     if a.new:
         if not a.content:
@@ -3235,7 +3734,7 @@ def main(argv=None):
         print(inspect_template(a.inspect or a.template or meta.get("template"), base, meta.get("layouts")))
         return
     if not a.content:
-        ap.error("give a YAML content file (or --templates, --new FILE, --inspect TEMPLATE)")
+        ap.error("give a YAML content file (or --templates, --explain, --new FILE, --inspect TEMPLATE)")
     if a.json:
         try:
             _main_build(a, report=True)
@@ -3279,6 +3778,7 @@ def _main_build(a, report=False):
     if report:
         print(json.dumps({
             "ok": True, "output": out, "template": builder.template_path, "dark": builder.dark,
+            "style": builder.style,
             "slides": len(prs.slides), "warnings": builder.problems, "slide_info": builder.slide_info,
             "preview": {"renderer": engine, "sheets": sheets, "images": slides} if slides else None,
         }, indent=2, ensure_ascii=False))

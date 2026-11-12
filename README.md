@@ -3,12 +3,13 @@
 **Beamer-style, fully editable PowerPoint decks from a small YAML file.**
 
 Write what goes on each slide in YAML, pick a template, run one command, and get a normal `.pptx`.
-Positions, sizes, fonts, colours and backgrounds are worked out for you, so the writing (by a person
-or an AI agent) is about the content only; anyone can keep editing the result in PowerPoint.
+Positions, sizes, fonts, colours and backgrounds are worked out for you: a figure goes beside its
+text, a slide that is too long continues on the next one. The writing (by a person or an AI agent) is
+about the content only; anyone can keep editing the result in PowerPoint.
 
 ```
 talk.yaml  +  template  ──ppt_templated.py──▶  talk.pptx  (+ slide previews, layout check, JSON report)
- (what)       (how it looks: 14 bundled, light and dark)      (native, editable)
+ (what)       (how it looks: 30 bundled, light and dark)      (native, editable)
 ```
 
 ![The same slide in each bundled template](templates/gallery.jpg)
@@ -48,6 +49,8 @@ python ppt_templated.py talk.yaml --preview                        # + slide PNG
 python ppt_templated.py talk.yaml --check --json                   # validate only; machine-readable report
 python ppt_templated.py talk.yaml -t parchment                     # same content, other look
 python ppt_templated.py --templates                                # the bundled templates
+python ppt_templated.py --explain table                            # keys and an example of any item
+python fonts.py --install                                          # the open fonts some templates use
 python ppt_templated.py --inspect "Company Template.potx"          # what a template provides
 python build_template.py --spec my_theme.yaml                      # a new template from a theme file
 ```
@@ -72,10 +75,12 @@ From Python: `from ppt_templated import build_deck; build_deck("talk.yaml", "tal
 | `flow`, `steps` | **Flowcharts and workflows**: native shapes and glued connectors, laid out automatically | Yes: drag a shape, its arrows follow |
 | `placeholder` | Dashed box reserving space for a figure you haven't made yet | Yes: Shape Fill → Picture |
 | `layout: references` / `closing` | Numbered references split over as many slides as needed / a thank-you slide | Yes |
-| `overflow: split` | Long lists and tables continue on `Title (2/3)` slides by themselves | Yes |
+| a figure, then its text | Placed side by side when that makes the figure larger (`arrange`) | Yes |
+| anything too long for a slide | Continues on `Title (2/3)` slides by itself: lists, tables, cards, timelines, stacks of items (`overflow`) | Yes |
+| `meta.fonts`, `meta.accent`, `meta.density` | Another font set, structure colour or text size for one deck, without a new template | Yes: it is the deck's theme |
 | `meta.logo` | A logo on every slide, placed clear of the title | Yes |
 | `build`, `animate`, `transition` | **Native animations** and transitions, including **Morph** | Yes |
-| `code`, `notes` | Monospace box, speaker notes | Yes |
+| `code`, `notes` | Code box in the template's code font, speaker notes | Yes |
 
 Every build checks the YAML: unknown keys, bad values and overfull slides are reported with the slide
 and a suggested fix. `--preview` renders the slides and measures the real layout (PowerPoint on
@@ -102,6 +107,30 @@ All in `templates/`; pick one by name with `meta.template: midnight` or `-t midn
 | `graphite` | dark | Graphite title bar, teal structure, orange alerts (metropolis, dark) |
 | `aurora` | dark | Blue-to-violet **gradient**, cyan structure |
 | `chalkboard` | dark | **Blackboard** texture, chalk-white text, chalk-yellow titles |
+| `palatino` | light | Book look: hairline rules, forest green; Palatino Linotype |
+| `garamond` | light | Humanities: warm white, burgundy titles, no bars; Garamond |
+| `schoolbook` | light | Textbook: pale title bar, steel blue; Century Schoolbook |
+| `gill` | light | Deep teal title bar, left-aligned covers; Gill Sans MT |
+| `franklin` | light | Maroon title bar, three-part footline; Franklin Gothic |
+| `nordic` | light | White, hairline under titles, slate blue; Segoe UI |
+| `berlin` | light | **Section strip** above the title bar, current section highlighted (Beamer `Berlin`) |
+| `berkeley` | light | **Section sidebar**, blue and gold (Beamer `Berkeley`) |
+| `latex` † | light | What Beamer really looks like: Latin Modern Sans, blue titles, no bars |
+| `article` † | light | A LaTeX paper on slides: Latin Modern Roman, black rules |
+| `metropolis` † | light | Beamer `metropolis` as designed: Fira Sans, dark teal bar, orange alerts |
+| `source` † | light | Modern journal: Source Serif 4 headings over Source Sans 3 |
+| `stix` † | light | Science-journal serif STIX Two, petrol title bar |
+| `console` † | light | Monospace headings (IBM Plex Mono) over IBM Plex Sans, one blue accent |
+| `solarized` † | light | Solarized light editor palette, Source Code Pro headings |
+| `terminal` † | dark | A terminal window: all JetBrains Mono, green on near-black, amber alerts |
+
+† These use **open fonts** (SIL Open Font License / GUST Font License). `python fonts.py --install`
+downloads them from their projects' repositories (pinned versions, SHA-256 checked) and installs them
+for your user; `python fonts.py` shows what is installed. Without them the deck still builds (layout
+is computed from stored font metrics) but PowerPoint shows a substitute, and the build says so.
+
+One deck can also change its fonts, structure colour or text size without a new template:
+`meta: {fonts: palatino, accent: teal, density: compact}`.
 
 Your own or your company's template, a new theme (dark mode, gradients, generated paper/grid/chalk
 textures, pictures): [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md).
@@ -112,10 +141,12 @@ textures, pictures): [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md).
 which content, and how to read the JSON report. In short:
 
 - `--new` gives a valid starter; `--check --json` validates in about a second and returns
-  `{"ok", "warnings": [{"slide", "message"}], "slide_info": [{"fill", "text_scale", ...}]}`.
-- No sizes, positions, fonts or hex colours in the YAML: the tool decides, the same way every time.
-- Long content splits itself (`overflow: split`); numbers come from files (`data:`); formulas are
-  plotted from the formula (`type: function`).
+  `{"ok", "warnings": [{"slide", "code", "message", "fix"}], "slide_info": [{"fill", "text_scale", ...}]}`.
+- `--explain` lists every layout and item; `--explain table` prints one item's keys, values and an
+  example, straight from the tables the validator uses.
+- No sizes, positions, columns, fonts or hex colours in the YAML: the tool decides, the same way
+  every time. A figure goes beside its text; long content continues on the next slide.
+- Numbers come from files (`data:`); formulas are plotted from the formula (`type: function`).
 - `--preview --json` adds `(measured)` warnings from the rendered slides, so overlaps are found
   without looking at images.
 
@@ -211,8 +242,9 @@ numbers; the layout is final from the start, and swapping in real figures change
 - **Light and dark.** Dark templates use PowerPoint's own colour mapping; every tint, chart and plot
   follows it. Use role colours (`structure`, `alert`, `example`, `muted`), not `"#RRGGBB"`, and give
   your own SVGs a transparent background.
-- **Fitting.** Text sizes are estimated (from the template fonts' widths) to lay out and shrink
-  content; `--preview` measures the rendered slides and reports real overlaps.
+- **Fitting.** Text is wrapped with the real glyph widths of the template's fonts (stored for every
+  bundled font, so a deck comes out the same on any machine) to lay out, arrange and split content;
+  `--preview` measures the rendered slides and reports real overlaps.
 - **Figures.** SVG and PDF stay vector in PowerPoint 2019/365; other viewers show a 300 dpi PNG
   rendered at the exact slide size (Chrome/Edge or Playwright's headless shell, else cairosvg, else
   PyMuPDF; PDF needs PyMuPDF). Converted files are cached in `.ppt-cache/`.
@@ -226,16 +258,17 @@ numbers; the layout is final from the start, and swapping in real figures change
 ## Project layout
 
 ```
-ppt_templated.py      the generator (CLI: build, --check, --preview, --json, --templates, --new, --inspect)
+ppt_templated.py      the generator (CLI: build, --check, --preview, --json, --templates, --explain, --new, --inspect)
 plots.py              draws `plot:` figures (matplotlib), incl. safe formulas and custom code
 flows.py              lays out `flow:` / `steps:` diagrams and routes their connectors
 media.py              reads figure files: SVG/PDF/raster sizes, conversion, cache
 datafiles.py          reads `data:` files (CSV/TSV/JSON) for tables, charts and plots
 metrics.py            glyph widths of the template fonts: how many lines a text takes in a box
+fonts.py              the open fonts some templates use: status, download, install
 preview.py            renders a .pptx to PNGs + contact sheets; measures the layout (PowerPoint or LibreOffice)
-build_template.py     builds templates from themes (built-in or a theme file)
+build_template.py     builds templates from themes (built-in or a theme file); --gallery
 textures.py           generated backgrounds: paper, grid, dots, lines, chalk, grain
-templates/            14 templates (oxford is the default) and gallery.jpg
+templates/            30 templates (oxford is the default) and gallery.jpg
 examples/             example.yaml → example_deck.pptx: every feature once
 transformer/          The Transformer lecture (YAML + deck)
 segmentation/         Image segmentation methods (YAML + deck)
@@ -250,7 +283,8 @@ TEMPLATE_GUIDE.md     how to make or adapt a template
 **[YAML_GUIDE.md](YAML_GUIDE.md) must change in the same commit as `ppt_templated.py`, `plots.py`,
 `flows.py`, `media.py`, `datafiles.py`, `metrics.py` or `preview.py`** whenever a YAML key, value, default, item,
 layout, shape, effect or message changes; [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md) with
-`build_template.py` and `textures.py`. Update [AGENTS.md](AGENTS.md) when the workflow or the advice
-changes, and the "at a glance" part of this README if it is affected. Run the tests
-(`python -m unittest discover tests`) and rebuild the templates (`python build_template.py`) and the
+`build_template.py`, `fonts.py` and `textures.py`. Update [AGENTS.md](AGENTS.md) when the workflow or
+the advice changes, and the "at a glance" part of this README if it is affected. Run the tests
+(`python -m unittest discover tests`; they fail when a key, item, template or warning code is missing
+from the guides) and rebuild the templates (`python build_template.py`, then `--gallery`) and the
 example decks after a change.

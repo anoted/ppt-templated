@@ -9,3 +9,5 @@ book_*/
 .ppt-cache/
 topics*/
 generated/
+# open fonts downloaded by fonts.py (python fonts.py --download)
+fonts/

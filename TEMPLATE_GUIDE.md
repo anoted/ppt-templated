@@ -69,9 +69,8 @@ accents must therefore be **light enough to carry dark text** (e.g. sky blue, co
 Bullet boxes copy the master's body styles (bullet characters, colors, indents, sizes of levels 1–9).
 Item sizes derive from the master's level-1 size: blocks 90%, tables 78%, flows 72%, code 70%,
 captions/charts/plots 66%, references 62%. Box heights come from wrapping the text word by word with
-the theme fonts' real glyph widths (`metrics.py`: exact for Calibri, Cambria, Arial and Times New
-Roman; scaled from the closest of them for Georgia, Constantia, Segoe UI and Aptos; a slightly wide
-stand-in for any other font, so text still fits).
+the theme fonts' real glyph widths (`metrics.py`: measured for every font of the bundled templates
+and of `meta.fonts`, see §2 *Fonts*; a slightly wide stand-in for any other font, so text still fits).
 
 ### Footline tokens
 
@@ -94,7 +93,7 @@ layouts       title = 'Title Slide', section = 'Section Header', frame = 'Title 
 title slide   placeholders: Title 1, Subtitle 2, Author, Institute, Date
 content area  x 0.60  y 1.30  w 12.13  h 5.60 in (every frame's content goes here)
 mode          light
-fonts         headings Constantia, body Cambria
+fonts         headings Constantia, body Cambria, code Consolas
 text sizes    frame title 28 pt; body levels 22 / 20 / 18 / 16 pt
 colours       dk1 #1C1C1C  lt1 #FFFFFF  dk2 #002147  lt2 #F0EEE8
               accent1 #002147 (structure)  accent2 #A6192E (alert)  accent3 #3D6B4F (example) ...
@@ -107,7 +106,7 @@ checklist in §5 on the contact sheets.
 
 `python ppt_templated.py --templates` lists the bundled templates (name, light/dark, look). The list
 comes from each file's properties, set by `build_template.py`: *Title* = label, *Subject* = the
-one-line description, *Category* = `light` or `dark`. A template without them is still listed, with
+one-line description, *Category* = `light` or `dark`, *Tags* = `...; mono=<code font>`. A template without them is still listed, with
 its mode worked out from its colours. A bundled template is used by its short name (`template:
 midnight` = `templates/beamer_midnight.pptx`); drop your own `.pptx` into `templates/` to use it by
 name too.
@@ -160,6 +159,8 @@ optional except what you want to change; missing colors come from the Oxford the
 | `dark` | false | `true`: light text on a dark background. Give `text`/`background` (light/dark) yourself; they are stored in the slots and colour map of §1 the way PowerPoint's dark themes do it |
 | `colors` | Oxford's | The 12 slots of §1 as hex `"RRGGBB"` (quote them in YAML). `dk1`/`lt1`/`dk2`/`lt2` may be written `text`/`background`/`text2`/`background2`, and always mean those roles, also with `dark: true` |
 | `fonts` | `[Calibri, Calibri]` | `[headings, body]` |
+| `mono` | `Consolas` | Font of `code` items and inline `` `code` `` |
+| `size` | 22 | Body text of the first level in pt (14 to 32); deeper levels keep their ratio. Lower it for wide fonts (monospace: 18, Segoe UI / Fira Sans: 20), raise it for small ones (Garamond: 24) |
 | `background` | `bg1` | The slide background: a theme colour (`bg2`, `[bg1, 95, 0]`) · a texture name · `{gradient: [bg1, bg2], angle: 90}` (two or more theme colours, angle in degrees) · `{texture: paper, strength: 1, ink: accent1}` · `{image: picture.jpg}` (relative to the theme file, stretched over the slide) |
 | `frame` | `bar` | Frame titles: `bar` (filled bar) \| `rule` (hairline under the title) \| `plain` |
 | `bar`, `bar_text` | `accent1`, `bg1` | Bar fill and title color (`frame: bar`) |
@@ -176,6 +177,8 @@ optional except what you want to change; missing colors come from the Oxford the
 | `bullets` | `[[►, 70], [•, 100], [–, 100]]` | `[char, size %]` per level, repeated for deeper levels |
 | `bullet_color` | `accent1` | |
 | `title_bold`, `subtitle_italic` | false | |
+| `nav` | – | Show the talk's sections on every frame: `top` (a strip of section names above the frame title, Beamer Berlin / Frankfurt) \| `side` (a sidebar with the short title and the section names, Beamer Berkeley / PaloAlto). The frame moves down or to the right to make room; the content area follows |
+| `nav_fill`, `nav_text` | `accent1`, `bg1` | Fill of the strip / sidebar and colour of the section names (the current one is bold, the others dimmed) |
 
 **Color values** in these keys are theme references, so they follow the palette: `accent1`–`6`,
 `tx1`, `tx2`, `bg1`, `bg2`, or `[name, lumMod %, lumOff %]`: `[accent1, 75, 0]` is 25% darker,
@@ -208,14 +211,57 @@ average, since tints and text are chosen for it.
 | `graphite` (dark) | Graphite title bar, teal structure, orange alerts (metropolis, dark) | Calibri |
 | `aurora` (dark) | Blue-to-violet gradient, cyan structure, centred covers | Calibri Light / Calibri |
 | `chalkboard` (dark) | Blackboard texture, chalk-white text, chalk-yellow titles | Cambria / Calibri |
+| `palatino` | Hairline rules, forest green, book look | Palatino Linotype |
+| `garamond` | Warm white, burgundy titles, no bars | Garamond (`size: 24`) |
+| `schoolbook` | Pale title bar, steel blue, textbook look | Century Schoolbook (`size: 20`) |
+| `gill` | Deep teal bar, left-aligned covers | Gill Sans MT |
+| `franklin` | Maroon bar and three-part footline | Franklin Gothic Medium / Book |
+| `nordic` | White, hairline under titles, slate blue | Segoe UI Light / Segoe UI (`size: 20`) |
+| `berlin` | `nav: top`: section strip above an indigo bar | Calibri |
+| `berkeley` | `nav: side`: section sidebar, blue and gold | Cambria / Calibri |
+| `latex` * | Beamer's default theme in its own typeface | LM Sans 10, code LM Mono 10 |
+| `article` * | A LaTeX paper: black rules, bold titles | LM Roman 10, code LM Mono 10 |
+| `metropolis` * | The Metropolis theme as designed | Fira Sans, code Fira Mono (`size: 20`) |
+| `source` * | Serif headings over sans text, ink blue | Source Serif 4 / Source Sans 3, code Source Code Pro |
+| `stix` * | Petrol bar, three-part footline, journal serif | STIX Two Text |
+| `console` * | Monospace headings, IBM blue | IBM Plex Mono / IBM Plex Sans (`size: 20`) |
+| `solarized` * | Solarized light palette, coding-font headings | Source Code Pro / Source Sans 3 |
+| `terminal` * (dark) | Everything monospace, green on near-black, amber alerts | JetBrains Mono (`size: 18`) |
 
-**Fonts:** use fonts installed wherever the deck is opened (Office fonts: Calibri, Cambria,
-Constantia, Georgia, Times New Roman, Arial...). For the **body**, pick one with lining figures
-(digits of equal height): Georgia and Constantia have old-style figures that bounce in tables and
-axes, so use them for headings only. Cambria matches Cambria Math, the equation font.
+\* open fonts, see below.
+
+**Fonts:** use fonts installed wherever the deck is opened. Three kinds work out of the box:
+
+- **Office fonts** (on every machine with Microsoft Office): Calibri, Cambria, Constantia, Georgia,
+  Times New Roman, Arial, Palatino Linotype, Garamond, Century Schoolbook, Gill Sans MT, Franklin
+  Gothic, Segoe UI, Consolas.
+- **Open fonts** listed in `fonts.py` (SIL Open Font License / GUST Font License: free to use, share and
+  embed): Latin Modern (`LM Roman 10`, `LM Sans 10`, `LM Mono 10`), `STIX Two Text`, `Source Serif 4`,
+  `Source Sans 3`, `Source Code Pro`, `Fira Sans`, `Fira Mono`, `IBM Plex Sans`, `IBM Plex Mono`,
+  `JetBrains Mono`. `python fonts.py --install` downloads them from their projects' repositories
+  (pinned versions, checked against SHA-256 sums) and installs them for the current user;
+  `python fonts.py` shows which are installed. A deck that uses a missing one builds anyway, with a
+  `font-missing` warning. Write the names exactly as above (they are the Windows names; macOS lists
+  Latin Modern as "Latin Modern Roman").
+- **Any other font**: works, but text is then fitted with the widths of a similar stored font, a little
+  wide. To have it measured exactly, add it to `SOURCES` and `FONTS` in `metrics.py` (its docstring
+  says how).
+
+For the **body**, pick a font with lining figures (digits of equal height): Georgia and Constantia
+have old-style figures that bounce in tables and axes, so use them for headings only. Cambria matches
+Cambria Math, the equation font. Monospaced body text (`terminal`) holds about 40% fewer words per
+line: give such themes a smaller `size`.
+
+**Section navigation** (`nav`): the master gets a shape named `Section Navigation` holding the token
+`{sections}`. When a deck is built, the token is removed and the section names are written into a
+text box of the same position on every frame, outline and references slide, in that shape's text
+size and colour. Any template (Route B, C) gets the same behaviour from a shape with that name: a
+wide one is filled left to right, a tall one top to bottom. Title, section, statement and closing
+slides do not show it.
 
 **Geometry** (title bar, content area, footline) is set by the constants at the top of
-`build_template.py` (`BAR_H`, `TITLE`, `BODY`, `FOOT_H`): 16:9, content area 0.6 in from the sides.
+`build_template.py` (`BAR_H`, `TITLE`, `BODY`, `FOOT_H`, and `NAV_H`, `SIDE_W` for `nav`): 16:9, content
+area 0.6 in from the sides (and from the sidebar).
 The result is an ordinary template; finish it by hand (Route C) if needed.
 
 ## 3. Route B: adapt an existing template

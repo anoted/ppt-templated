@@ -12,3 +12,5 @@ pypandoc_binary>=1.13
 pymupdf>=1.23
 # optional: PNG fallbacks of SVG figures when neither Chrome nor Edge is installed
 # cairosvg>=2.7
+# optional: only to add the width table of a new font to metrics.py (python metrics.py <key>)
+# fonttools>=4.40

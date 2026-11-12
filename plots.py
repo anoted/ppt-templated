@@ -67,10 +67,15 @@ SANS_FALLBACK = ["Calibri", "Carlito", "Arial", "Liberation Sans", "Helvetica", 
 # metric-compatible open fonts (installed with LibreOffice): same widths, so labels fit the same way
 SAME_METRICS = {"calibri": "Carlito", "calibri light": "Carlito", "cambria": "Caladea", "arial": "Liberation Sans",
                 "helvetica": "Liberation Sans", "times new roman": "Liberation Serif", "courier new": "Liberation Mono",
-                "georgia": "Gelasio", "segoe ui": "Selawik", "aptos": "Carlito"}
+                "georgia": "Gelasio", "segoe ui": "Selawik", "aptos": "Carlito",
+                # matplotlib lists the Latin Modern faces by their long names
+                "lm roman 10": "Latin Modern Roman", "lm sans 10": "Latin Modern Sans",
+                "lm mono 10": "Latin Modern Mono"}
 SANS = {"calibri", "calibri light", "carlito", "arial", "helvetica", "segoe ui", "aptos", "verdana", "tahoma",
         "trebuchet ms", "liberation sans", "inter", "open sans", "roboto", "lato", "source sans pro", "gill sans",
-        "franklin gothic", "century gothic", "dejavu sans"}
+        "franklin gothic", "century gothic", "dejavu sans", "gill sans mt", "franklin gothic book",
+        "franklin gothic medium", "segoe ui light", "fira sans", "source sans 3", "ibm plex sans", "lm sans 10",
+        "latin modern sans", "consolas", "jetbrains mono", "ibm plex mono", "fira mono", "source code pro"}
 
 
 # ------------------------------------------------------------------------------------------
@@ -131,7 +136,26 @@ def _lum(color) -> float:
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 
+_open_fonts_added = False
+
+
+def _add_open_fonts() -> None:
+    """Fonts fetched by fonts.py (the fonts/ folder) work in plots even when they are not installed."""
+    global _open_fonts_added
+    if _open_fonts_added:
+        return
+    _open_fonts_added = True
+    folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if name.lower().endswith((".ttf", ".otf")):
+            try:
+                font_manager.fontManager.addfont(os.path.join(folder, name))
+            except (OSError, RuntimeError):
+                pass
+
+
 def _installed(name) -> bool:
+    _add_open_fonts()
     try:
         font_manager.findfont(font_manager.FontProperties(family=name), fallback_to_default=False)
         return True

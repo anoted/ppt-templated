@@ -17,7 +17,13 @@ Related: [AGENTS.md](AGENTS.md) (the short version, for AI agents) · [README.md
 
 **What you never have to decide:** positions, sizes, fonts, backgrounds and colours are worked out
 from the template, so one content file gives a finished deck with any of the templates, light or dark.
-Keys such as `size`, `width` or `valign` exist for the rare case a warning asks for them.
+A figure and its text are put side by side, and content that is too long for a slide continues on the
+next one (§13). Keys such as `size`, `width`, `valign` or `columns` exist for the rare case you want to
+decide it yourself or a warning asks for them.
+
+**Looking something up without this guide:** `python ppt_templated.py --explain` lists every layout
+and item; `--explain table` (any item, any layout, or `meta`) prints its keys, accepted values and a
+minimal example, read from the same tables the builder checks your YAML against.
 
 ---
 
@@ -44,12 +50,14 @@ python ppt_templated.py talk.yaml --preview    # build talk.pptx, render slide i
 | `python ppt_templated.py talk.yaml` | Build `talk.pptx` next to the YAML (or `meta.output`). Overwrites it |
 | `... --preview [DIR]` | Also render `slide-NN.png` and contact sheets `sheet-N.png` (6 numbered slides per image) into `.preview/<deck>/` (or DIR), and measure the rendered layout (see below) |
 | `... --check` | Validate and lay out only; writes nothing (fast) |
-| `... --json` | Print one JSON object to stdout: `ok`, `output`, `dark`, `slides`, `warnings` (`[{slide, message}]`), `slide_info` (per slide: `layout`, `title`, `items`, `fill` = share of the content area used, `text_scale`, `animation_steps`), `preview`. On an error: `{"ok": false, "error": ...}` and exit code 1 |
+| `... --json` | Print one JSON object to stdout: `ok`, `output`, `dark`, `style` (the fonts, accent colour and density in effect), `slides`, `warnings` (`[{slide, code, message, fix}]`, codes in §16), `slide_info` (per slide: `layout`, `title`, `items`, `fill` = share of the content area used, `text_scale`, `arranged` = `columns` when a figure and its text were put side by side, `animation_steps`), `preview`. On an error: `{"ok": false, "error": ...}` and exit code 1 |
 | `... --strict` | Exit code 1 if there were warnings |
 | `... -o out.pptx` / `-t NAME_OR_PATH` | Output path / template (beat `meta.output` / `meta.template`); `-t midnight` or `-t my.potx` |
 | `... --allow-python` | Run the code of `plot: {type: python}` items (§8.2). Only for YAML you trust |
 | `... --keep-template-slides` | Keep the template's own preview slides (rarely needed) |
-| `python ppt_templated.py --templates [--json]` | List the bundled templates: name, light/dark, look |
+| `python ppt_templated.py --templates [--json]` | List the bundled templates: name, light/dark, look (and, with `--json`, their fonts and which are not installed) |
+| `python ppt_templated.py --explain [NAME] [--json]` | What you can write: every layout and item; with NAME (an item, a layout or `meta`) its keys, accepted values and an example |
+| `python fonts.py [--install [NAME ...]]` | Which fonts the templates use and whether they are installed; `--install` downloads and installs the open fonts (all, or those of the named templates / families) for your user |
 | `python ppt_templated.py --new talk.yaml [-t NAME]` | Write a starter content file (never overwrites) |
 | `python ppt_templated.py --inspect [TEMPLATE]` | Print a template's layouts, content area, light/dark mode, fonts, text sizes, theme colours and footline tokens |
 | `python preview.py deck.pptx` | Preview any `.pptx` |
@@ -81,7 +89,6 @@ meta:
   author: Jane Doe
   date: today
   template: oxford          # the default; any bundled name or a .pptx/.potx path, see §4
-  overflow: split           # long lists and tables continue on more slides, see §13
 
 slides:
   - layout: title
@@ -148,8 +155,27 @@ Top level: `meta` (mapping) and `slides` (list of mappings). A slide is a mappin
 | `section_style` | `page` | `page` = Section Header slides; `outline` = an outline slide per section, current one bold |
 | `outline_title` | `Outline` | Title of those outline slides |
 | `layouts` | standard names | Map the keys `title`, `section`, `frame`, `columns`, `title_only`, `plain` to your template's layout names (a name or a list to try in order), see [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md) |
-| `overflow` | `shrink` | `shrink` \| `split`: what a frame whose content is **one** `bullets`/`numbered` list or **one** `table` does when it does not fit. `split` continues it on as many slides as needed, titled `Title (1/3)` ..., with the table header repeated and numbering running on. A slide's own `overflow` wins |
+| `overflow` | `split` | `split` \| `shrink`: what a frame does when its content does not fit. `split` continues it on as many slides as needed, titled `Title (1/3)` ... (§13); `shrink` keeps one slide and makes the text smaller, with a warning below 90%. A slide's own `overflow` wins |
+| `arrange` | `auto` | `auto` \| `stack` \| `columns`: a frame whose content is one figure (`image`, `placeholder`, `plot`, `chart`) plus text. `auto` puts them side by side when the figure comes out larger that way, `stack` always keeps them one under the other, `columns` always side by side (§13). A slide's own `arrange` wins |
+| `fonts` | the template's | Another font set for this deck: a name from the table below, or `{headings: ..., body: ..., code: ...}` with any installed fonts (each key optional). The whole deck follows, also charts, plots and diagrams |
+| `accent` | the template's | Another structure colour (title bars, bullets, blocks, links): a name (`navy` `blue` `teal` `green` `forest` `olive` `gold` `orange` `red` `crimson` `maroon` `magenta` `purple` `indigo` `slate` `black`) or `"#RRGGBB"`. It is darkened (on a dark template: lightened) until it reads on the template's background, so any colour is safe; `--json` reports the colour used in `style.accent` |
+| `density` | `normal` | `compact` \| `normal` \| `airy`: body text 12% smaller / as the template / 12% larger. Use `compact` for a dense technical deck instead of setting `size` on items |
 | `logo` | – | A picture (SVG/PNG/...) on the title, section, outline, frame and references slides: `logo: assets/logo.svg` or `{path, dark, position, height}`. `dark`: the picture to use on dark templates; `position`: `top-right` (default) \| `top-left` \| `bottom-right` \| `bottom-left`; `height`: 0.45 in (0.05 to 3; 1.5× on the title slide). On frames it is centred on the title band and the title is narrowed to end before it |
+
+**Font sets** for `meta.fonts` (headings / body / code). The second group are open fonts: run
+`python fonts.py --install` once (§1); a missing one is reported as a warning.
+
+| `fonts:` | Fonts |
+|---|---|
+| `calibri` · `cambria` · `arial` · `times` | Calibri Light / Calibri · Cambria · Arial · Times New Roman (code: Consolas) |
+| `georgia` · `palatino` · `garamond` · `schoolbook` | Georgia / Cambria · Palatino Linotype · Garamond · Century Schoolbook |
+| `gill` · `franklin` · `segoe` | Gill Sans MT · Franklin Gothic Medium / Book · Segoe UI Light / Segoe UI |
+| `latex` · `latex-serif` | Latin Modern Sans (Beamer's own) · Latin Modern Roman (LaTeX documents); code: Latin Modern Mono |
+| `stix` · `source` · `source-sans` | STIX Two Text · Source Serif 4 / Source Sans 3 · Source Sans 3; code: Source Code Pro |
+| `fira` · `plex` · `plex-mono` · `mono` | Fira Sans / Fira Mono · IBM Plex Sans / Mono · Plex Mono headings · JetBrains Mono everywhere |
+
+Text is fitted with each font's real glyph widths, so a wider font (monospace, Century Schoolbook)
+simply holds fewer words per line; the checks tell you when a slide got too full.
 
 **Templates** (`--templates` prints this list; every content file works with every one of them):
 
@@ -161,12 +187,36 @@ Top level: `meta` (mapping) and `slides` (list of mappings). A slide is a mappin
 | `modern` | light | White, hairline under titles, Calibri |
 | `blue` · `charcoal` · `crimson` | light | Beamer Madrid · metropolis · Beaver |
 | `minimal` | light | Black on white, bold titles, one red accent, Arial |
+| `palatino` | light | Book look: hairline rules, forest green, Palatino Linotype |
+| `garamond` | light | Humanities: warm white, burgundy titles, no bars, Garamond |
+| `schoolbook` | light | Textbook: pale title bar, steel blue, Century Schoolbook |
+| `gill` | light | Deep teal title bar, left-aligned covers, Gill Sans MT |
+| `franklin` | light | Maroon title bar, three-part footline, Franklin Gothic |
+| `nordic` | light | White, hairline under titles, slate blue, Segoe UI |
+| `berlin` | light | Section names in a strip above the title bar, current one highlighted (Beamer Berlin) |
+| `berkeley` | light | Sidebar with the section names, blue and gold (Beamer Berkeley) |
 | `parchment` | light | Paper texture, sepia ink, serif |
 | `notebook` | light | Graph-paper background, ink-blue and red-pen accents |
 | `midnight` | dark | Deep slate with fine grain, sky-blue structure |
 | `graphite` | dark | Graphite title bar, teal structure (metropolis, dark) |
 | `aurora` | dark | Blue-to-violet gradient, cyan structure |
 | `chalkboard` | dark | Blackboard texture, chalk-white text, yellow titles |
+| `latex` * | light | What Beamer really looks like: Latin Modern Sans, blue titles, no bars |
+| `article` * | light | A LaTeX paper on slides: Latin Modern Roman, black rules |
+| `metropolis` * | light | Beamer Metropolis as designed: Fira Sans, dark teal bar, orange alerts |
+| `source` * | light | Modern journal: Source Serif 4 headings, Source Sans 3 text |
+| `stix` * | light | Science-journal serif STIX Two, petrol title bar |
+| `console` * | light | Monospace headings (IBM Plex Mono) over IBM Plex Sans, one blue accent |
+| `solarized` * | light | Solarized light editor palette, Source Code Pro headings |
+| `terminal` * | dark | A terminal window: everything in JetBrains Mono, green on near-black |
+
+\* uses open fonts: `python fonts.py --install` (or `--install latex` for one template) installs them
+for your user. Without them PowerPoint substitutes another font; the build warns (`font-missing`).
+To share such a deck, export a PDF or tick *File > Options > Save > Embed fonts in the file*.
+
+`berlin` and `berkeley` show the talk's sections on every frame: they need `layout: section` slides,
+and work best with 3 to 7 short section titles (more are shown smaller, then only those around the
+current one).
 
 ## 5. Slide layouts
 
@@ -178,7 +228,7 @@ Keys on **every** slide: `layout` (default `frame`), `notes` (speaker notes; use
 | `title` | `title`, `subtitle`, `author`, `institute`, `date` (all default to `meta`) | Title Slide layout. Titles over 2 lines shrink to 28 pt |
 | `section` | `title`, `subtitle` | Section Header (or an outline slide with `meta.section_style: outline`) |
 | `outline` | `title` (default `Outline`) | Numbered list of all `section` titles |
-| `frame` | `title`, `subtitle` (smaller second line), `content`, `valign`, `overflow` | A normal slide. Long titles shrink to fit one line (a warning says when they still wrap) |
+| `frame` | `title`, `subtitle` (smaller second line), `content`, `valign`, `overflow`, `arrange` | A normal slide. Long titles shrink to fit one line (a warning says when they still wrap). `overflow` and `arrange` as in `meta` (§4), for this slide |
 | `plain` | `content`, `valign` | No title bar or footline; content in a 0.6 in margin |
 | `statement` | `text` (the message), `title` (small label above it, structure colour), `subtitle` (muted line below) | One big centred message on the Blank layout, in the heading font, sized to fill the slide in at most three lines. For a takeaway, a question to the audience, a transition. `title` alone is used as the message |
 | `references` | `items` (list, one entry per reference), `title` (`References`), `size` (62% of body level 1, ≥ 12 pt), `start` (1), `numbered` (true) | Hanging-indent list `[1] ...`. Too many for one slide → continues on more slides titled `References (1/2)`, entries spread evenly. An entry that starts with its own label (`"[12] ..."`) keeps it; numbering continues after it |
@@ -269,6 +319,9 @@ An equation wider than its column is broken over lines by PowerPoint and may run
 `--preview` reports it (`measured`). Give it a wider column or a smaller `size`.
 
 ### 6.5 `code`
+
+Set in the template's code font (Consolas; the console templates and `meta.fonts` bring their own:
+JetBrains Mono, IBM Plex Mono, Latin Modern Mono, ...). Inline `` `code` `` uses the same font.
 
 ```yaml
 - code: |
@@ -835,16 +888,33 @@ item without `build` is one group, so it morphs as a whole.
 2. One `columns` item with two columns of one bullet list each, no `width` → *Two Content* placeholders.
 3. Anything else → *Title Only* plus native shapes stacked in the content area (the *Title and Content* body rectangle).
 
+**A figure and its text (automatic columns):** when a frame's content is exactly one figure (`image`,
+`placeholder`, `plot` or `chart`) and text items (`bullets`, `numbered`, `text`, blocks, `math`,
+`quote`), written one after the other, the two are put side by side whenever the figure comes out
+larger that way, which on a wide slide is nearly always. The figure goes on the side it was written
+on: figure first → left. The figure gets 60%, 50% or 40% of the width, the largest share that still
+leaves the text room at full size. It stays stacked when the figure is wide and low (a pipeline, a
+panorama), when the figure sits *between* text items, or when you gave it a `width` or `height`.
+`arrange: stack` or `arrange: columns` (slide or `meta`) decides it by hand; `columns:` is still there
+for anything else (two figures, uneven splits, three columns). `--json` shows `"arranged": "columns"`.
+
 **Fitting:** text items take their estimated height; figures (`image`, `images`, `placeholder`,
 `plot`, `chart`, `flow`, `steps`) are flexible and shrink first. If the stack still does not fit, all
 text shrinks in steps to 65% (warning below 90%); past that, *content does not fit*. Text heights are
 estimated from the template fonts' widths, not measured: use `--preview`, which measures.
 
-**Too long for one slide:** with `overflow: split` (on `meta` or the slide) a frame whose content is
-one `bullets`/`numbered` list or one `table` and would shrink below 90% is continued on as many slides
-as needed (`Title (1/2)`, `Title (2/2)`): entries are spread evenly, a top-level bullet keeps its
-sub-bullets, numbering runs on, table headers repeat with the same column widths, and the caption goes
-under the last part. Speaker notes stay on the first part. Any other content shrinks as described.
+**Too long for one slide:** a frame whose content would shrink below 90% is continued on as many
+slides as needed (`Title (1/2)`, `Title (2/2)`); speaker notes stay on the first part.
+- One `bullets`/`numbered` list or one `table`: entries are spread evenly, a top-level bullet keeps its
+  sub-bullets, numbering runs on, table headers repeat with the same column widths, and the caption
+  goes under the last part.
+- One row of `cards` or one `timeline`: the entries are divided evenly over the fewest slides that hold them.
+- Several items: they are divided between slides at item boundaries, in order, as many per slide as
+  fit; a list or table that is still too long for its slide is then continued as above.
+
+`overflow: shrink` (on `meta` or the slide) keeps everything on one slide instead: the text shrinks
+as described above. Keep a figure and the text that explains it on a slide of their own rather than
+relying on the split: it divides where the space runs out, not where the argument turns.
 
 **Default sizes** (from the template master; `--inspect` prints them): body level 1 (e.g. 22 pt),
 blocks 90%, tables 78%, flows 72%, code 70%, captions/charts/plots 66%, references 62%.
@@ -852,7 +922,7 @@ blocks 90%, tables 78%, flows 72%, code 70%, captions/charts/plots 66%, referenc
 **Good slides (check the contact sheets for these):**
 - One message per slide; make the title that message.
 - At most ~6 bullets of ≤ 2 lines; split instead of shrinking. Nothing below 14 pt except captions and references (≥ 12).
-- Figure + explanation: `columns` with the figure at `width: 0.45`–`0.6`.
+- Figure + explanation: write the figure, then the text; they are placed side by side (above).
 - Key results: `stats` or a short `table`; trends: `plot`; editable numbers: `chart`.
 - A row of blocks for comparisons (they align automatically); `alertblock` for the one takeaway.
 - Diagrams: `flow`/`steps` when they are boxes and arrows, an SVG otherwise, `placeholder` until drawn.
@@ -965,6 +1035,23 @@ with sample numbers and `caption: "Sample data - replace"`. Swap in the real fil
 
 Errors stop the build and name the slide (`error: slide 7 "Results": ...`); warnings never stop it.
 
+In the JSON report every warning has a stable `code` and a `fix`:
+
+| `code` | The message contains | `fix` |
+|---|---|---|
+| `text-shrunk` | `shrunk to N%` | Cut text, or let it continue on a second slide |
+| `content-overflow` | `does not fit even at 65%` | Move items to a new slide or cut content |
+| `overlap-measured` | `(measured)` | Real overlap in the rendered slide: shorten the text named, or split |
+| `title-long` | `title wraps` | Shorten the title to one line |
+| `unknown-key` | `unknown key` | Remove it or use the suggestion; `--explain ITEM` lists the keys |
+| `bad-value` | `is not one of` | Use a listed value |
+| `unknown-layout` · `misplaced-item` · `bad-slide` · `bad-option` | wrong layout name · items outside `content:` · a slide that is not a mapping · `build`/`animate` where it does not work | As the message says |
+| `word-too-wide` | `is wider than a` | Shorten the word or use fewer entries per row |
+| `diagram-small` | `diagram drawn with N pt text` | Give the diagram its own slide, or fewer / shorter nodes |
+| `image-low-resolution` · `svg-renderer` | `dpi at this size` · `no SVG renderer` | Larger image or SVG · install a renderer |
+| `font-missing` | `is not installed` | `python fonts.py --install`, or another template / font set |
+| `other` | anything else | The message itself says what to do |
+
 | Message | Fix |
 |---|---|
 | `unknown key 'x' (did you mean 'y'?) - ignored` | Misspelt or misplaced key; use the suggestion |
@@ -976,8 +1063,9 @@ Errors stop the build and name the slide (`error: slide 7 "Results": ...`); warn
 | `<kind> needs settings, e.g. ...` | Give the item a mapping (or list) as shown |
 | `build works on ... only - use animate` | `build` is for lists, rows and diagrams |
 | `text shrunk to N% to fit` / `bullets shrunk to N%` | Too much on the slide: cut or split |
-| `content does not fit even at 65%` | Split the slide (or `overflow: split` for one list/table) |
-| `overflow: split works when the content is one bullets/numbered list or one table` | Split by hand, or reduce the slide to one list/table |
+| `content does not fit even at 65%` | One item is too large for a slide, or `overflow: shrink` is set: cut content or split the slide by hand |
+| `font 'X' is not installed on this machine ...` | An open font of the template or of `meta.fonts`: `python fonts.py --install`, or choose a template / font set you have |
+| `meta.fonts: unknown font set 'x'` · `meta.accent: 'x' is not a colour name ...` | Use a name of §4, or `{headings, body, code}` / `"#RRGGBB"` |
 | `title wraps even at N pt` | Shorten the title |
 | `cards: 'word' is wider than a card (N in) and breaks in the middle` (also `timeline`) | Fewer `columns` or entries, or a shorter word |
 | `x.png is only N dpi at this size` | Use a larger image or an SVG |
