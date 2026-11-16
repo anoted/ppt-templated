@@ -74,6 +74,7 @@ Leave these out; the defaults are chosen for you and adapt to every template:
 - **No colours except roles**: `structure`, `alert`, `example`, `muted`. Never `"#RRGGBB"` on an item:
   a fixed colour does not follow the template and can vanish on a dark one.
 - **No fonts, backgrounds, logos per slide, footers**: they live in the template / `meta`.
+- **No animations or transitions** (`animate`, `build`, `transition`) unless the user asks for them.
 - **No hand-made data arrays when a file exists**: `data: results.csv` on a `table`, `chart` or `plot`.
 - **No sampled points for a formula**: `plot: {type: function, f: "1/(1+exp(-x))", x: [-6, 6]}`.
 

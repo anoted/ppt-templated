@@ -3594,7 +3594,6 @@ slides:
           - First point
           - - a detail of the first point
           - Second point
-        build: true
 
   # a figure and its text: written one after the other, placed side by side automatically
   - title: Our approach
